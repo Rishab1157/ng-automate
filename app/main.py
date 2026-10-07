@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.agents.MasterAgent.RunExecutor import run_executor
 from app.api.router import api_router
 from app.config import settings
 from app.core.exceptions import (
@@ -35,9 +36,17 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     setup_logging()
     if await ping():
         await ensure_indexes()
+        try:
+            resumed = await run_executor.resume_interrupted()
+            logger.info("Resumed %d interrupted run(s)", resumed)
+        except Exception:
+            # The API still starts; the runs stay unfinished and are resumed on the next start.
+            logger.exception("Could not resume interrupted runs")
     else:
         logger.warning("MongoDB not reachable at startup (%s)", settings.MONGO_DATABASE)
     yield
+    # Running runs stop unfinished (they resume on the next start) before the database client goes away.
+    await run_executor.shutdown()
     await close_client()
 
 

@@ -20,6 +20,7 @@ from app.services.gitConnectionService import GitConnectionService, GitFetchServ
 from app.utils.ArchiveUtils import inspect_archive
 
 from .ProjectStorageService import ProjectStorageService
+from .ProjectServiceContextManager import DiscardOnError
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class ProjectService:
         user_id: str,
     ) -> ProjectModel:
         project_id = ObjectId()
-        with self._discard_on_error(project_id):
+        with DiscardOnError(self.storage, project_id):
             path = await self.storage.save_archive(str(project_id), chunks)
             archive = await asyncio.to_thread(inspect_archive, path, self.storage.max_bytes)
             db_model = ProjectMapper.to_create_db_model(
@@ -70,7 +71,7 @@ class ProjectService:
     ) -> ProjectModel:
         source = await self.git_connection_service.get_clone_source(git_connection_id, org_id)
         project_id = ObjectId()
-        with self._discard_on_error(project_id):
+        with DiscardOnError(self.storage, project_id):
             path = self.storage.archive_path(str(project_id))
             fetched = await asyncio.to_thread(
                 self.git_fetch_service.fetch_to_archive, source, branch or source.branch, path, self.storage.max_bytes

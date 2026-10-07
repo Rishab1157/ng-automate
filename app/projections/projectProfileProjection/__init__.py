@@ -1,0 +1,3 @@
+from .projectProfileProjection import PROJECT_PROFILE_DETAIL_PROJECTION
+
+__all__ = ["PROJECT_PROFILE_DETAIL_PROJECTION"]

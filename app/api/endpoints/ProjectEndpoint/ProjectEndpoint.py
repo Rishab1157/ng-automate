@@ -4,8 +4,10 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 
 from app.core.security import get_current_user, require_permission, resolve_org_id
 from app.dto.projectDto import CreateGitProjectDTO, ProjectResponseDTO
+from app.dto.projectProfileDto import ProjectProfileResponseDTO
 from app.models.authModel import CurrentUserModel
 from app.permissions.ngAutomatePermission import NGAUTOMATE_ACCESS_PERM
+from app.services.projectProfileService import ProjectProfileService
 from app.services.projectService import ProjectService
 
 UPLOAD_CHUNK_BYTES = 1024 * 1024
@@ -17,6 +19,7 @@ router = APIRouter(
 )
 
 project_service = ProjectService()
+project_profile_service = ProjectProfileService()
 
 
 @router.post(
@@ -77,6 +80,15 @@ async def get_projects(
 )
 async def get_project(project_id: str, org_id: str = Depends(resolve_org_id)) -> ProjectResponseDTO:
     return ProjectResponseDTO.from_model(await project_service.get(project_id, org_id))
+
+
+@router.get(
+    "/{project_id}/profile",
+    response_model=ProjectProfileResponseDTO,
+    summary="Get the project's current profile: the result of its latest completed analysis.",
+)
+async def get_project_profile(project_id: str, org_id: str = Depends(resolve_org_id)) -> ProjectProfileResponseDTO:
+    return ProjectProfileResponseDTO.from_model(await project_profile_service.get_latest(project_id, org_id))
 
 
 async def _read_chunks(file: UploadFile) -> AsyncIterator[bytes]:
