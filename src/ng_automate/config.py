@@ -14,21 +14,28 @@ load_dotenv()
 @dataclass(frozen=True)
 class LLMConfig:
     model: str
-    base_url: str | None
-    # repr=False keeps the key out of prints, logs and error messages.
-    api_key: str = field(repr=False)
+    base_url: str | None = None
+    # Local models (Ollama) need no key. repr=False keeps it out of prints and logs.
+    api_key: str | None = field(default=None, repr=False)
     # "chat" = Chat Completions API, "responses" = OpenAI Responses API, "auto" = SDK decides.
     # Gateways that only allow /chat/completions need "chat".
     api_mode: str = "auto"
+    # Ollama only: context window in tokens. Ollama's default (4096) is too small for agents.
+    num_ctx: int | None = None
+    # False for models without a "thinking" mode (e.g. Devstral); the SDK asks for it by default.
+    thinking: bool = True
 
 
 def load_llm_config() -> LLMConfig:
     """Read the LLM settings from environment variables."""
+    num_ctx = os.environ.get("LLM_NUM_CTX")
     return LLMConfig(
         model=_require("LLM_MODEL"),
         base_url=os.environ.get("LLM_BASE_URL") or None,
-        api_key=_require("LLM_API_KEY"),
+        api_key=os.environ.get("LLM_API_KEY") or None,
         api_mode=os.environ.get("LLM_API_MODE", "auto"),
+        num_ctx=int(num_ctx) if num_ctx else None,
+        thinking=os.environ.get("LLM_THINKING", "true").lower() != "false",
     )
 
 
@@ -46,8 +53,10 @@ def load_llm_config_from_mongo(connection_id: str) -> LLMConfig:
     return LLMConfig(
         model=doc["model"],
         base_url=doc.get("base_url"),
-        api_key=doc["api_key"],
+        api_key=doc.get("api_key"),
         api_mode=doc.get("api_mode", "auto"),
+        num_ctx=doc.get("num_ctx"),
+        thinking=doc.get("thinking", True),
     )
 
 

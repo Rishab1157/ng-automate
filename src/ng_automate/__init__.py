@@ -1,5 +1,9 @@
 import argparse
+import os
 from pathlib import Path
+
+# Hide the OpenHands welcome banner printed on import.
+os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
 
 
 def main() -> None:
