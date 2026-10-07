@@ -4,16 +4,14 @@ Agent system that analyzes a test-automation project, makes it build, generates 
 
 ## Setup
 
-The OpenHands SDK source is a git submodule in `third_party/software-agent-sdk` (pinned to v1.53.0), installed in editable mode so you can read and debug it.
+The OpenHands SDK (v1.53.0) and LangGraph (1.2.14) source code live in `third_party/` as plain folders (part of this repo), installed in editable mode so you can read and debug them.
 
 ```
-git clone --recurse-submodules <this repo>
+git clone <this repo>
 cd ng-automate
 python -m uv sync
 copy .env.example .env    # then fill in the values
 ```
-
-Already cloned without submodules? Run `git submodule update --init`.
 
 ## Run the API
 
