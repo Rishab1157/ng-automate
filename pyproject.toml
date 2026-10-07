@@ -1,27 +1,46 @@
 [project]
 name = "ng-automate"
 version = "0.1.0"
-description = "Add your description here"
+description = "Agent system that analyzes, builds, generates and runs test-automation projects"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.142.2",
+    "langgraph>=1.2.14",
     "openhands-sdk>=1.53.0",
     "openhands-tools>=1.53.0",
+    "openhands-workspace>=1.53.0",
+    "pydantic-settings>=2.15.0",
     "pyjwt>=2.15.1",
     "pymongo>=4.18.2",
-    "python-dotenv>=1.2.4",
     "python-multipart>=0.0.32",
     "uvicorn[standard]>=0.54.0",
 ]
 
-[project.scripts]
-ng-automate = "ng_automate:main"
+[dependency-groups]
+dev = [
+    "httpx2>=2.13.1",
+    "pytest>=9.1.1",
+]
 
-[build-system]
-requires = ["uv_build>=0.12.23,<0.13.0"]
-build-backend = "uv_build"
+[tool.uv]
+# Run from source like QXcel (`python main.py`); the `app` package is not installed.
+package = false
 
 [tool.uv.sources]
 openhands-sdk = { path = "third_party/software-agent-sdk/openhands-sdk", editable = true }
 openhands-tools = { path = "third_party/software-agent-sdk/openhands-tools", editable = true }
+openhands-workspace = { path = "third_party/software-agent-sdk/openhands-workspace", editable = true }
+langgraph = { path = "third_party/langgraph/libs/langgraph", editable = true }
+langgraph-checkpoint = { path = "third_party/langgraph/libs/checkpoint", editable = true }
+langgraph-prebuilt = { path = "third_party/langgraph/libs/prebuilt", editable = true }
+langgraph-sdk = { path = "third_party/langgraph/libs/sdk-py", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "network: needs internet access (clones a public GitHub repository)",
+    "docker: starts real Docker containers (set NGAUTOMATE_DOCKER_TESTS=1 to run)",
+    "e2e: needs Docker and a reachable LLM (set NGAUTOMATE_E2E_TESTS=1 to run)",
+]

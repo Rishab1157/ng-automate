@@ -1,3 +1,6 @@
 [submodule "third_party/software-agent-sdk"]
 	path = third_party/software-agent-sdk
 	url = https://github.com/OpenHands/software-agent-sdk.git
+[submodule "third_party/langgraph"]
+	path = third_party/langgraph
+	url = https://github.com/langchain-ai/langgraph.git

@@ -2,25 +2,16 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Hello agent",
+      "name": "NG Automate API",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",
-      "module": "ng_automate",
-      "args": ["hello", "${input:repoPath}"],
+      "program": "${workspaceFolder}/main.py",
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",
       "env": { "PYTHONIOENCODING": "utf-8" },
       "console": "integratedTerminal",
       "justMyCode": false
-    }
-  ],
-  "inputs": [
-    {
-      "id": "repoPath",
-      "type": "promptString",
-      "description": "Repo folder for the agent to look at",
-      "default": "C:\\Users\\Rishab Sharma\\Desktop\\projects\\QXcel\\QXcel-API"
     }
   ]
 }

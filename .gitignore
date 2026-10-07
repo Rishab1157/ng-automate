@@ -10,3 +10,10 @@ wheels/
 .venv
 
 .env
+
+# Uploaded and fetched projects
+data/
+
+# Server logs
+logs/
+.pytest_cache/
