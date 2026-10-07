@@ -2,8 +2,8 @@
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
   "python.analysis.extraPaths": [
     "${workspaceFolder}/src",
-    "${workspaceFolder}/../software-agent-sdk/openhands-sdk",
-    "${workspaceFolder}/../software-agent-sdk/openhands-tools"
+    "${workspaceFolder}/third_party/software-agent-sdk/openhands-sdk",
+    "${workspaceFolder}/third_party/software-agent-sdk/openhands-tools"
   ],
   "files.exclude": {
     "**/__pycache__": true,

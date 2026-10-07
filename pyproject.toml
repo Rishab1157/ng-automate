@@ -19,5 +19,5 @@ requires = ["uv_build>=0.12.23,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.sources]
-openhands-sdk = { path = "../software-agent-sdk/openhands-sdk", editable = true }
-openhands-tools = { path = "../software-agent-sdk/openhands-tools", editable = true }
+openhands-sdk = { path = "third_party/software-agent-sdk/openhands-sdk", editable = true }
+openhands-tools = { path = "third_party/software-agent-sdk/openhands-tools", editable = true }

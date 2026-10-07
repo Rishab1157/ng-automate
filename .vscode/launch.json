@@ -2,21 +2,10 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Hello agent (pick a repo)",
+      "name": "Hello agent",
       "type": "debugpy",
       "request": "launch",
-      "module": "ng_automate",
-      "args": ["hello", "${input:repoPath}"],
-      "cwd": "${workspaceFolder}",
-      "envFile": "${workspaceFolder}/.env",
-      "env": { "PYTHONIOENCODING": "utf-8" },
-      "console": "integratedTerminal",
-      "justMyCode": true
-    },
-    {
-      "name": "Hello agent (step into OpenHands SDK too)",
-      "type": "debugpy",
-      "request": "launch",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
       "module": "ng_automate",
       "args": ["hello", "${input:repoPath}"],
       "cwd": "${workspaceFolder}",
