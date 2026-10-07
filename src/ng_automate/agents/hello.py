@@ -10,8 +10,8 @@ from openhands.sdk import Agent, Conversation, Tool
 from openhands.sdk.conversation.response_utils import get_agent_final_response
 from openhands.tools.file_editor import FileEditorTool
 
-from ng_automate.config import load_llm_config
-from ng_automate.llm import build_llm
+from ng_automate.llm.config import load_llm_config
+from ng_automate.llm.factory import build_llm
 
 TASK = (
     "Do NOT create or edit any files. Only look. "

@@ -2,7 +2,7 @@ from typing import Any
 
 from openhands.sdk import LLM
 
-from ng_automate.config import LLMConfig
+from ng_automate.models.llm import LLMConfig
 
 
 def build_llm(cfg: LLMConfig) -> LLM:
