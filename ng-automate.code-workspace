@@ -1,0 +1,13 @@
+{
+  "folders": [
+    { "name": "ng-automate", "path": "." },
+    { "name": "OpenHands SDK (source)", "path": "../software-agent-sdk" }
+  ],
+  "settings": {
+    "python.defaultInterpreterPath": "${workspaceFolder:ng-automate}/.venv/Scripts/python.exe",
+    "files.exclude": {
+      "**/__pycache__": true,
+      "**/*.pyc": true
+    }
+  }
+}
