@@ -1,5 +1,9 @@
 """Fetch one branch of a Git repository (latest commit only) into a zip.
 
+The repo URL, token and branch all come from the QXcel git connection. A connection without a branch gets
+GIT_DEFAULT_BRANCH ("main"); a repo that has no such branch (older repos use "master") falls back to the repo's own
+default branch. A branch the connection names explicitly must exist: falling back would test the wrong code.
+
 The token reaches git only through environment variables, so it never appears in the
 URL, the command line, .git/config, logs or error messages.
 """
@@ -7,6 +11,7 @@ URL, the command line, .git/config, logs or error messages.
 import base64
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -24,28 +29,29 @@ _TOKEN_USERNAMES = {"GITHUB": "x-access-token", "GITLAB": "oauth2", "BITBUCKET":
 _DEFAULT_TOKEN_USERNAME = "x-access-token"
 # Branch names only; a leading "-" could be read by git as an option.
 _BRANCH_PATTERN = re.compile(r"^(?!-)[\w.\-/]+$")
+# Shown in errors when the repo's default branch is used.
+_DEFAULT_BRANCH_LABEL = "default"
+
+
+class _BranchNotFoundError(GitFetchError):
+    """The remote has no such branch."""
 
 
 class GitFetchService:
     def __init__(self, timeout_seconds: int = settings.GIT_CLONE_TIMEOUT_SECONDS) -> None:
         self.timeout_seconds = timeout_seconds
 
-    def fetch_to_archive(
-        self, source: GitCloneSourceModel, branch: str, destination: Path, max_bytes: int
-    ) -> GitFetchResultModel:
-        """Clone `branch` of the source repo and save it as a zip at `destination`."""
+    def fetch_to_archive(self, source: GitCloneSourceModel, destination: Path, max_bytes: int) -> GitFetchResultModel:
+        """Clone the connection's branch of its repo and save it as a zip at `destination`."""
         _check_repo_url(source.repo_url)
-        _check_branch(branch)
+        if source.branch is not None:
+            _check_branch(source.branch)
         token = _secret(source.token)
         env = _git_env(token, source.provider_code)
 
         with tempfile.TemporaryDirectory(prefix="ngauto-clone-", ignore_cleanup_errors=True) as tmp:
             repo_dir = Path(tmp) / "repo"
-            self._run_git(
-                ["clone", "--depth", "1", "--single-branch", "--no-recurse-submodules",
-                 "--branch", branch, "--", source.repo_url, str(repo_dir)],
-                env, token, branch,
-            )
+            branch = self._clone(source, repo_dir, env, token)
             commit_sha = self._run_git(["-C", str(repo_dir), "rev-parse", "HEAD"], env, token, branch).strip()
 
             if directory_size(repo_dir) > max_bytes:
@@ -53,6 +59,23 @@ class GitFetchService:
             create_archive(repo_dir, destination)
 
         return GitFetchResultModel(commit_sha=commit_sha, branch=branch)
+
+    def _clone(self, source: GitCloneSourceModel, repo_dir: Path, env: dict[str, str], token: str | None) -> str:
+        """Clone into `repo_dir`; returns the branch that was cloned."""
+        if source.branch is not None:
+            self._run_git(_clone_args(source.repo_url, repo_dir, source.branch), env, token, source.branch)
+            return source.branch
+        default = settings.GIT_DEFAULT_BRANCH
+        try:
+            self._run_git(_clone_args(source.repo_url, repo_dir, default), env, token, default)
+            return default
+        except _BranchNotFoundError:
+            shutil.rmtree(repo_dir, ignore_errors=True)
+        # No "main": clone whatever the remote's HEAD points to, and read its name.
+        self._run_git(_clone_args(source.repo_url, repo_dir, None), env, token, _DEFAULT_BRANCH_LABEL)
+        return self._run_git(
+            ["-C", str(repo_dir), "symbolic-ref", "--short", "HEAD"], env, token, _DEFAULT_BRANCH_LABEL
+        ).strip()
 
     def _run_git(self, args: list[str], env: dict[str, str], token: str | None, branch: str) -> str:
         # credential.helper= : never use credentials stored on this machine, only the connection's token.
@@ -65,8 +88,20 @@ class GitFetchService:
         except subprocess.TimeoutExpired:
             raise GitFetchError(ErrorMessages.GIT_TIMEOUT.format(seconds=self.timeout_seconds)) from None
         if result.returncode != 0:
-            raise GitFetchError(_describe_failure(result.stderr, token, branch))
+            message = _describe_failure(result.stderr, token, branch)
+            if message == ErrorMessages.GIT_BRANCH_NOT_FOUND.format(branch=branch):
+                raise _BranchNotFoundError(message)
+            raise GitFetchError(message)
         return result.stdout
+
+
+def _clone_args(repo_url: str, repo_dir: Path, branch: str | None) -> list[str]:
+    """Latest commit of one branch; without `branch`, the remote's default branch."""
+    selected = ["--branch", branch] if branch is not None else []
+    return [
+        "clone", "--depth", "1", "--single-branch", "--no-recurse-submodules", *selected,
+        "--", repo_url, str(repo_dir),
+    ]
 
 
 def _check_repo_url(repo_url: str) -> None:

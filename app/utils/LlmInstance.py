@@ -1,12 +1,14 @@
 """Build the LLM an OpenHands agent talks to."""
 
-from typing import Any
-
-from openhands.sdk import LLM
+from typing import TYPE_CHECKING, Any
 
 from app.config import settings
 from app.models.llmModel import LlmConfigModel
 from app.models.modelConnectionModel import ModelConnectionSourceModel
+
+if TYPE_CHECKING:
+    # The OpenHands SDK (and LiteLLM under it) takes seconds to import: only agents load it, not the API.
+    from openhands.sdk import LLM
 
 # QXcel provider_code -> (LiteLLM prefix, keep QXcel's base URL?, api_mode).
 # Native providers use LiteLLM's own endpoints; QXcel's stored base URLs include paths LiteLLM does not expect.
@@ -35,7 +37,9 @@ def get_default_llm_config() -> LlmConfigModel:
     )
 
 
-def build_llm(config: LlmConfigModel) -> LLM:
+def build_llm(config: LlmConfigModel) -> "LLM":
+    from openhands.sdk import LLM
+
     options: dict[str, Any] = {}
     if config.num_ctx:
         options["litellm_extra_body"] = {"options": {"num_ctx": config.num_ctx}}

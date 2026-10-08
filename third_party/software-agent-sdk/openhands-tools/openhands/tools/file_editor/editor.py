@@ -53,6 +53,33 @@ def _is_encodable(text: str, encoding: str) -> bool:
     return True
 
 
+def _drop_unmatched_whitespace(old_str: str, new_str: str) -> str:
+    """new_str without the leading/trailing whitespace that old_str.strip() removed.
+
+    Only whitespace that new_str has too is dropped (the common prefix/suffix), so
+    whitespace the caller added on purpose beyond old_str's is kept.
+    """
+    leading = old_str[: len(old_str) - len(old_str.lstrip())]
+    trailing = old_str[len(old_str.rstrip()) :]
+    start = 0
+    while (
+        start < len(leading)
+        and start < len(new_str)
+        and new_str[start] == leading[start]
+    ):
+        start += 1
+    end = len(new_str)
+    count = 0
+    while (
+        count < len(trailing)
+        and end > start
+        and new_str[end - 1] == trailing[len(trailing) - 1 - count]
+    ):
+        end -= 1
+        count += 1
+    return new_str[start:end]
+
+
 class FileEditor:
     """
     An filesystem editor tool that allows the agent to
@@ -218,6 +245,12 @@ class FileEditor:
             # is the replacement content, and stripping it would silently drop
             # meaningful leading/trailing whitespace (e.g. a Markdown hard line
             # break or intentional indentation) the caller asked to write.
+            # But the whitespace stripped from old_str stays in the file (the
+            # match starts after the file's own indentation), so drop the same
+            # whitespace from new_str too. Otherwise a guessed indentation is
+            # added on top of the file's: 4 spaces + 8 guessed = 12, and every
+            # retry adds more.
+            new_str = _drop_unmatched_whitespace(old_str, new_str)
             old_str = old_str.strip()
             pattern = re.escape(old_str)
             occurrences = [

@@ -1,3 +1,3 @@
-from .RunEndpoint import router
+from .RunEndpoint import router, socket_router
 
-__all__ = ["router"]
+__all__ = ["router", "socket_router"]

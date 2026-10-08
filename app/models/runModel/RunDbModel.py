@@ -15,6 +15,10 @@ class RunCreateDbModel(BaseModel):
     project_id: ObjectId
     created_by: ObjectId
     model_connection_id: ObjectId | None = None
+    mode: str
+    test_selector: str | None = None
+    test_data_id: ObjectId | None = None
+    run_scope: str = "generated"
     status: str
     stage: str
     # Same shape as RunOutputsModel; profile_id is stored as an ObjectId once set.

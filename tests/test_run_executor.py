@@ -30,6 +30,7 @@ from app.models.runModel import (
 from app.services.projectProfileService import ProjectProfileService
 from app.services.runService import RunService
 from tests.test_master_graph import (
+    _write_cited_files,
     CONTAINER_ID,
     FACT_SHEET,
     FINDINGS,
@@ -85,6 +86,12 @@ class FakeRunService:
 
     async def mark_completed(self, run_id: str) -> None:
         self._update(run_id, status=RunStatus.COMPLETED, stage=RunStage.COMPLETED)
+
+    async def mark_cancelled(self, run_id: str, message: str) -> None:
+        self._update(
+            run_id, status=RunStatus.CANCELLED, stage=RunStage.CANCELLED,
+            error=RunErrorModel(code="RUN_CANCELLED", message=message),
+        )
 
     async def mark_failed(self, run_id: str, code: str, message: str) -> None:
         self._update(run_id, status=RunStatus.FAILED, stage=RunStage.FAILED, error=RunErrorModel(code=code, message=message))
@@ -142,10 +149,26 @@ class FakeGraph:
             self.active -= 1
 
 
+class FakeCommands:
+    """No user commands unless a test queues some; records what was marked."""
+
+    def __init__(self) -> None:
+        self.pending: list[Any] = []
+        self.marked: list[tuple[Any, Any, str | None]] = []
+
+    async def get_pending(self, run_id: str) -> list[Any]:
+        pending, self.pending = self.pending, []
+        return pending
+
+    async def mark(self, command: Any, status: Any, message: str | None = None) -> None:
+        self.marked.append((command, status, message))
+
+
 def make_executor(
     runs: FakeRunService, graph: FakeGraph, sandbox: FakeSandboxService | None = None, **options: Any
 ) -> tuple[RunExecutor, FakeSandboxService]:
     sandbox = sandbox or FakeSandboxService()
+    options.setdefault("command_service", FakeCommands())
     executor = RunExecutor(
         run_service=runs,  # type: ignore[arg-type]
         sandbox_service=sandbox,  # type: ignore[arg-type]
@@ -186,11 +209,34 @@ async def test_successful_run_is_completed_and_cleaned_up() -> None:
     assert done.status == RunStatus.COMPLETED
     assert done.error is None
     assert graph.states == [
-        {"run_id": run.id, "org_id": run.org_id, "project_id": run.project_id, "model_connection_id": None}
+        {"run_id": run.id, "org_id": run.org_id, "project_id": run.project_id, "model_connection_id": None,
+         "mode": "analyze", "test_selector": None, "test_data_id": None,
+         "run_scope": "generated"}
     ]
     assert runs.events == [(run.id, RunEventType.RUN_COMPLETED, RUN_COMPLETED_MESSAGE, {"profile_id": "profile-1"})]
     assert sandbox.stopped == []
     assert sandbox.removed == [run.id]
+
+
+@pytest.mark.anyio
+async def test_test_run_reports_the_test_outcome_when_it_completes() -> None:
+    run = make_run()
+    runs = FakeRunService(run)
+    report = {"outcome": "passed", "stop_reason": "passed", "detail": None, "runs": 2, "heals": 1, "total": 3,
+              "passed": 3, "failed": 0, "errors": 0, "skipped": 0, "changed_files": ["pom.xml"]}
+
+    async def tests_passed(state: dict[str, Any]) -> dict[str, Any]:
+        return {**state, "profile_id": "profile-1", "test_report": report}
+
+    executor, _ = make_executor(runs, FakeGraph(tests_passed))
+
+    await executor.submit(run.id)
+    await settle(executor)
+
+    [(_, event_type, message, data)] = runs.events
+    assert event_type == RunEventType.RUN_COMPLETED
+    assert message == "Run completed: All 3 tests passed after 1 fix by the healer"
+    assert data == {"profile_id": "profile-1", "test_report": report}
 
 
 @pytest.mark.anyio
@@ -422,6 +468,7 @@ async def test_graph_is_built_once_on_first_use() -> None:
         run_service=runs,  # type: ignore[arg-type]
         sandbox_service=FakeSandboxService(),  # type: ignore[arg-type]
         graph_factory=build,  # type: ignore[arg-type]
+        command_service=FakeCommands(),  # type: ignore[arg-type]
     )
     assert builds == []
 
@@ -600,7 +647,7 @@ async def test_run_end_to_end_with_the_real_run_and_profile_services(app_db: Mon
     container_during_analysis: list[str | None] = []
 
     class CheckingAnalyzer(FakeAnalyzer):
-        def analyze(self, workspace: Any, fact_sheet: FactSheetModel, on_event: Any = None) -> Any:
+        def analyze(self, workspace: Any, fact_sheet: FactSheetModel, on_event: Any = None, control: Any = None) -> Any:
             container_during_analysis.append(db.runs.find_one({"_id": run_doc["_id"]})["sandbox_container_id"])
             return super().analyze(workspace, fact_sheet, on_event)
 
@@ -634,7 +681,7 @@ async def test_run_end_to_end_with_the_real_run_and_profile_services(app_db: Mon
 @pytest.mark.anyio
 async def test_interrupted_run_resumes_after_its_last_saved_stage(app_db: MongoClient, tmp_path: Path) -> None:
     project_dir = tmp_path / "runs" / "previous" / "project"
-    project_dir.mkdir(parents=True)
+    _write_cited_files(project_dir)
     run_doc = _insert_run(
         app_db,
         status="running",

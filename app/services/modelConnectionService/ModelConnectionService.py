@@ -12,6 +12,13 @@ from app.utils.LlmInstance import get_default_llm_config, llm_config_from_connec
 _NO_CONNECTION = {"", "undefined", "null", "none"}
 
 
+def connection_id_or_none(model_connection_id: str | None) -> str | None:
+    """The connection id to store, or None when none was chosen (the default model from .env is used then)."""
+    if model_connection_id is None or model_connection_id.strip().lower() in _NO_CONNECTION:
+        return None
+    return model_connection_id.strip()
+
+
 class ModelConnectionService:
     """Turns a QXcel model connection (read-only) into an LLM config."""
 
@@ -21,7 +28,7 @@ class ModelConnectionService:
 
     async def get_llm_config(self, model_connection_id: str | None, org_id: str) -> LlmConfigModel:
         """No connection -> the default model (Devstral). Otherwise the org's connection enabled for NG Automate."""
-        if model_connection_id is None or model_connection_id.strip().lower() in _NO_CONNECTION:
+        if connection_id_or_none(model_connection_id) is None:
             return get_default_llm_config()
         if not ObjectId.is_valid(model_connection_id):
             raise ValidationError(ErrorMessages.INVALID_OBJECT_ID.format(field="model_connection_id"))

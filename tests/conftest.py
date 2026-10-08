@@ -10,8 +10,13 @@ from collections.abc import AsyncIterator, Callable, Iterator
 
 # Must run before `app` is imported: settings are read once at import time.
 _TEST_DATA_DIR = tempfile.mkdtemp(prefix="ngauto-test-data-")
+_TEST_MONGO_URI = os.environ.get("TEST_MONGO_URI", "mongodb://localhost:27017")
 os.environ.update({
-    "MONGO_URI": os.environ.get("TEST_MONGO_URI", "mongodb://localhost:27017"),
+    "MONGO_URI": _TEST_MONGO_URI,
+    # Never the developer's QXcel server from .env: the test QXcel database lives next to the test database.
+    "QXCEL_MONGO_URI": _TEST_MONGO_URI,
+    # The healer's memory (Qdrant, embeddings) is off; its tests use an in-memory Qdrant and fake embeddings.
+    "HEAL_MEMORY_ENABLED": "false",
     # Per-process names: several test runs at once never share (or drop) each other's data.
     "MONGO_DATABASE": f"ng_automate_test_{os.getpid()}",
     "QXCEL_DATABASE": f"ng_automate_test_qxcel_{os.getpid()}",
@@ -73,7 +78,7 @@ async def app_db(mongo: MongoClient) -> AsyncIterator[MongoClient]:
     """
     yield mongo
     await close_client()
-    for name in ("projects", "runs", "run_events", "project_profiles"):
+    for name in ("projects", "runs", "run_events", "project_profiles", "test_data", "live_view_tickets", "run_commands"):
         mongo[settings.MONGO_DATABASE][name].delete_many({})
     for name in ("git_connections", "model_connections", "model_providers", "model_types"):
         mongo[settings.QXCEL_DATABASE][name].delete_many({})
@@ -83,7 +88,7 @@ async def app_db(mongo: MongoClient) -> AsyncIterator[MongoClient]:
 def client(mongo: MongoClient) -> Iterator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
-    for name in ("projects", "runs", "run_events", "project_profiles"):
+    for name in ("projects", "runs", "run_events", "project_profiles", "test_data", "live_view_tickets", "run_commands"):
         mongo[settings.MONGO_DATABASE][name].delete_many({})
     for name in ("git_connections", "model_connections", "model_providers", "model_types"):
         mongo[settings.QXCEL_DATABASE][name].delete_many({})

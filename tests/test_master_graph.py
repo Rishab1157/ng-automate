@@ -18,9 +18,11 @@ from app.agents.AnalyzerAgent.AgentEventMapper import AgentEvent
 from app.agents.MasterAgent.MasterGraph import (
     ANALYZE,
     COLLECT_FACTS,
+    GENERATE_TESTS,
     MAX_GRAPH_STEPS,
     PREPARE_WORKSPACE,
     SAVE_PROFILE,
+    TEST_AND_HEAL,
     build_master_graph,
     route_next,
 )
@@ -149,6 +151,14 @@ class FakeNodes:
         self._record(SAVE_PROFILE)
         return {"profile_id": "profile-1"}
 
+    async def generate_tests(self, state: MasterState) -> MasterState:
+        self._record(GENERATE_TESTS)
+        return {"generation": {"selector": "@ngauto"}}
+
+    async def test_and_heal(self, state: MasterState) -> MasterState:
+        self._record(TEST_AND_HEAL)
+        return {"test_report": {"stop_reason": "passed"}}
+
     def _record(self, name: str) -> None:
         self.calls.append(name)
         if name == self.fail_in:
@@ -157,8 +167,14 @@ class FakeNodes:
 
 def _existing_folder(tmp_path: Path) -> str:
     folder = tmp_path / "project"
-    folder.mkdir(exist_ok=True)
+    _write_cited_files(folder)
     return str(folder)
+
+
+def _write_cited_files(folder: Path) -> None:
+    """The files FINDINGS cites, so the evidence check keeps them."""
+    (folder / "src" / "test" / "java" / "pages").mkdir(parents=True, exist_ok=True)
+    (folder / "pom.xml").write_text("<project/>", encoding="utf-8")
 
 
 @pytest.mark.anyio
@@ -337,6 +353,10 @@ def test_initial_state_holds_the_ids_and_every_saved_output() -> None:
         "org_id": run.org_id,
         "project_id": run.project_id,
         "model_connection_id": run.model_connection_id,
+        "mode": "analyze",
+        "test_selector": None,
+        "test_data_id": None,
+        "run_scope": "generated",
         "project_dir": "/data/runs/x/project",
         "fact_sheet": EMPTY_FACT_SHEET.model_dump(mode="json"),
     }
@@ -421,12 +441,20 @@ class FakeSandbox:
         self.cleaned_up = threading.Event()
         self.stopped: list[str] = []
         self.removed: list[str] = []
+        self.writable_org: str | None = None
 
     def prepare_project_dir(self, project_id: str, run_id: str) -> Path:
         folder = self.workdir / "runs" / run_id / "project"
-        folder.mkdir(parents=True, exist_ok=True)
-        (folder / "pom.xml").write_text("<project/>", encoding="utf-8")
+        _write_cited_files(folder)
         return folder
+
+    @contextmanager
+    def open_writable(
+        self, project_dir: Path, org_id: str, on_started: Callable[[str], None] | None = None
+    ) -> Iterator[FakeSession]:
+        self.writable_org = org_id
+        with self.open_readonly(project_dir, on_started) as session:
+            yield session
 
     @contextmanager
     def open_readonly(self, project_dir: Path, on_started: Callable[[str], None] | None = None) -> Iterator[FakeSession]:
@@ -474,7 +502,8 @@ class FakeAnalyzer:
         return self
 
     def analyze(
-        self, workspace: Any, fact_sheet: FactSheetModel, on_event: Callable[[AgentEvent], None] | None = None
+        self, workspace: Any, fact_sheet: FactSheetModel, on_event: Callable[[AgentEvent], None] | None = None,
+        control: Any = None,
     ) -> AnalyzerFindingsModel:
         assert on_event is not None
         try:
@@ -590,6 +619,8 @@ async def test_full_run_through_the_real_nodes(tmp_path: Path) -> None:
     profile_id = runs.outputs["profile_id"]
     assert runs.outputs == {
         "project_dir": str(project_dir),
+        "generation": None,
+        "test_attempts": None,
         "fact_sheet": FACT_SHEET,
         "findings": FINDINGS,
         "llm_model": LLM_MODEL,
@@ -598,6 +629,8 @@ async def test_full_run_through_the_real_nodes(tmp_path: Path) -> None:
     assert final == {
         **ids,
         "project_dir": str(project_dir),
+        "generation": None,
+        "test_attempts": None,
         "fact_sheet": FACT_SHEET.model_dump(mode="json"),
         "findings": FINDINGS.model_dump(mode="json"),
         "llm_model": LLM_MODEL,
@@ -795,3 +828,19 @@ async def test_save_profile_from_a_resumed_state(tmp_path: Path) -> None:
     assert result == {"profile_id": setup.runs.outputs["profile_id"]}
     assert setup.runs.stages == [RunStage.SAVING_PROFILE]
     assert setup.runs.event_types() == [RunEventType.STAGE_STARTED, RunEventType.STAGE_COMPLETED]
+
+
+@pytest.mark.anyio
+async def test_evidence_that_does_not_exist_is_removed_and_reported(tmp_path: Path) -> None:
+    from app.agents.MasterAgent import MasterNodes as master_nodes_module
+    from app.agents.AnalyzerAgent.EvidenceVerifier import verify_evidence
+
+    folder = tmp_path / "project"
+    _write_cited_files(folder)
+    (folder / "src" / "test" / "java" / "pages").rmdir()  # the cited important path is now missing
+
+    findings, removed = verify_evidence(FINDINGS, folder)
+
+    assert removed == ["src/test/java/pages"]
+    assert findings.important_paths == []
+    assert master_nodes_module.EVIDENCE_REMOVED_MESSAGE.format(count=1).startswith("Removed 1 cited file path")

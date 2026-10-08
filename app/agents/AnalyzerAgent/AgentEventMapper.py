@@ -16,6 +16,7 @@ from openhands.sdk.llm import content_to_str
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.glob import GlobObservation, GlobTool
 from openhands.tools.grep import GrepObservation, GrepTool
+from openhands.tools.terminal import TerminalObservation, TerminalTool
 
 from app.agents.AnalyzerAgent.AnalyzerPrompts import project_relative_path
 from app.models.runModel import RunEventLevel, RunEventType
@@ -106,6 +107,10 @@ def _map_observation(event: ObservationEvent) -> AgentEvent:
         message = f"glob found {len(observation.files)} file(s){' (truncated)' if observation.truncated else ''}"
     elif isinstance(observation, GrepObservation):
         message = f"grep matched {len(observation.matches)} file(s){' (truncated)' if observation.truncated else ''}"
+    elif isinstance(observation, TerminalObservation):
+        if observation.exit_code is not None:
+            data["exit_code"] = observation.exit_code
+        message = "command timed out" if observation.timeout else f"command exited with {observation.exit_code}"
     else:
         message = f"{event.tool_name} result"
     return AgentEvent(RunEventType.AGENT_OBSERVATION, RunEventLevel.DETAIL, message, data)
@@ -158,6 +163,8 @@ def _describe_action(tool: str, args: dict[str, Any]) -> str:
     elif tool == GrepTool.name:
         include = f" ({args['include']})" if args.get("include") else ""
         text = f'grep "{args.get("pattern", "")}"{_in_path(args)}{include}'
+    elif tool == TerminalTool.name:
+        text = f"$ {args.get('command', '')}"
     elif tool == FileEditorTool.name:
         text = f"{args.get('command', 'file_editor')} {project_relative_path(str(args.get('path', '')))}"
         view_range = args.get("view_range")

@@ -7,17 +7,20 @@ every unfinished run, and on shutdown it stops the running ones without marking 
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from app.agents.HealerAgent.HealLoopPolicy import describe_test_report
 from app.config import settings
 from app.core.exceptions import ErrorCode, ErrorMessages, NgAutomateException, NotFoundError
-from app.models.runModel import RunEventType, RunModel, RunStatus
+from app.models.runModel import RunEventType, RunModel, RunStatus, TestReportModel
 
 from .MasterState import initial_state
+from .RunControl import RunControl
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
+    from app.services.runCommandService import RunCommandService
     from app.services.runService import RunService
     from app.services.sandboxService import SandboxService
 
@@ -28,8 +31,9 @@ RUN_TIMEOUT_ERROR_CODE = "RUN_TIMEOUT"
 RUN_TIMEOUT_MESSAGE = "The run took longer than {seconds} seconds and was stopped"
 
 RUN_COMPLETED_MESSAGE = "Run completed: the project profile is ready"
+TEST_RUN_COMPLETED_MESSAGE = "Run completed: {summary}"
 
-_FINISHED_STATUSES = (RunStatus.COMPLETED, RunStatus.FAILED)
+_FINISHED_STATUSES = (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED)
 
 
 class RunExecutor:
@@ -40,6 +44,7 @@ class RunExecutor:
         run_service: RunService | None = None,
         sandbox_service: SandboxService | None = None,
         graph_factory: Callable[[], CompiledStateGraph] | None = None,
+        command_service: RunCommandService | None = None,
     ) -> None:
         if max_concurrent < 1:
             raise ValueError("max_concurrent must be at least 1")
@@ -50,6 +55,7 @@ class RunExecutor:
         # Production defaults are created on first use: they pull in LangGraph and the agent SDKs.
         self._run_service = run_service
         self._sandbox_service = sandbox_service
+        self._command_service = command_service
         self._graph_factory = graph_factory
         self._graph: CompiledStateGraph | None = None
         # The event loop keeps only weak references to tasks: without these, a running task could be garbage collected.
@@ -64,6 +70,14 @@ class RunExecutor:
 
             self._run_service = RunService()
         return self._run_service
+
+    @property
+    def command_service(self) -> RunCommandService:
+        if self._command_service is None:
+            from app.services.runCommandService import RunCommandService
+
+            self._command_service = RunCommandService(self.run_service)
+        return self._command_service
 
     @property
     def sandbox_service(self) -> SandboxService:
@@ -118,24 +132,45 @@ class RunExecutor:
                 await self._release_resources(run_id)
 
     async def _run_graph(self, run: RunModel) -> None:
-        deadline: asyncio.Timeout | None = None
+        task = asyncio.current_task()
+        # The run's whole time budget, from now. Paused time is added back (extend_deadline).
+        deadline = asyncio.timeout(self.timeout_seconds)
+
+        def stop(reason: str) -> None:
+            if task is not None:
+                task.cancel()
+
+        def extend_deadline(seconds: float) -> None:
+            when = deadline.when()
+            if when is not None and not deadline.expired():
+                deadline.reschedule(when + seconds)
+
+        with RunControl(run.id, self.command_service, stop, extend_deadline) as control:
+            poller = asyncio.create_task(control.poll(), name=f"run-{run.id}-commands")
+            try:
+                await self._execute_graph(run, deadline)
+            except asyncio.CancelledError:
+                if control.stop_reason is None:
+                    logger.info("Run %s interrupted; it resumes on the next start", run.id)
+                    raise
+                # Stopped by the user (or paused too long): the run ends here as cancelled.
+                if task is not None:
+                    task.uncancel()
+                await self._cancel(run, control.stop_reason)
+            finally:
+                poller.cancel()
+                await asyncio.gather(poller, return_exceptions=True)
+
+    async def _execute_graph(self, run: RunModel, deadline: asyncio.Timeout) -> None:
         try:
             await self.run_service.mark_running(run.id)
             graph = self._get_graph()
             state = initial_state(run)
-            deadline = asyncio.timeout(self.timeout_seconds)
             async with deadline:
                 final_state = await graph.ainvoke(state)
             await self.run_service.mark_completed(run.id)
-            await self.run_service.append_event(
-                run.id,
-                run.org_id,
-                RunEventType.RUN_COMPLETED,
-                RUN_COMPLETED_MESSAGE,
-                data={"profile_id": final_state.get("profile_id")},
-            )
+            await self._report_completed(run, final_state)
         except asyncio.CancelledError:
-            logger.info("Run %s interrupted; it resumes on the next start", run.id)
             raise
         except NgAutomateException as error:
             await self._fail(run, error.error_code.value, error.message)
@@ -149,6 +184,22 @@ class RunExecutor:
             else:
                 logger.exception("Run %s failed with an unexpected error", run.id)
                 await self._fail(run, ErrorCode.INTERNAL_SERVER_ERROR.value, ErrorMessages.INTERNAL_ERROR)
+
+    async def _report_completed(self, run: RunModel, final_state: dict[str, Any]) -> None:
+        """The run-completed event: what the run produced, in one line."""
+        data: dict[str, Any] = {"profile_id": final_state.get("profile_id")}
+        message = RUN_COMPLETED_MESSAGE
+        if final_state.get("test_report"):
+            report = TestReportModel.model_validate(final_state["test_report"])
+            message = TEST_RUN_COMPLETED_MESSAGE.format(summary=describe_test_report(report))
+            data["test_report"] = report.model_dump(mode="json")
+        await self.run_service.append_event(run.id, run.org_id, RunEventType.RUN_COMPLETED, message, data=data)
+
+    async def _cancel(self, run: RunModel, reason: str) -> None:
+        await self.run_service.mark_cancelled(run.id, reason)
+        await self.run_service.append_event(
+            run.id, run.org_id, RunEventType.RUN_CANCELLED, reason, data={"code": ErrorCode.RUN_CANCELLED.value}
+        )
 
     async def _fail(self, run: RunModel, code: str, message: str) -> None:
         await self.run_service.mark_failed(run.id, code, message)

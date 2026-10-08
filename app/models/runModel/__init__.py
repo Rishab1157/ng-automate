@@ -5,10 +5,15 @@ from .RunModel import (
     RunEventLevel,
     RunEventModel,
     RunEventType,
+    RunMode,
     RunModel,
     RunOutputsModel,
+    RunScope,
     RunStage,
     RunStatus,
+    TestAttemptModel,
+    TestReportModel,
+    TestStopReason,
 )
 
 __all__ = [
@@ -19,8 +24,13 @@ __all__ = [
     "RunEventLevel",
     "RunEventModel",
     "RunEventType",
+    "RunMode",
     "RunModel",
     "RunOutputsModel",
+    "RunScope",
     "RunStage",
     "RunStatus",
+    "TestStopReason",
+    "TestAttemptModel",
+    "TestReportModel",
 ]

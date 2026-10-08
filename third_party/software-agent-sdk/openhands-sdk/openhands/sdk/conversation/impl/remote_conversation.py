@@ -746,6 +746,7 @@ class RemoteConversation(BaseConversation):
         observability_tags: list[str] | None = None,
         observability_span_name: str = "conversation",
         observability_parent_span_context: str | None = None,
+        autotitle: bool = True,
         **_: object,
     ) -> None:
         """Remote conversation proxy that talks to an agent server.
@@ -878,6 +879,8 @@ class RemoteConversation(BaseConversation):
                 "observability_span_name": observability_span_name,
                 "observability_parent_span_context": observability_parent_span_context,
                 "user_id": user_id,
+                # False skips the extra LLM call that names the conversation after its first message.
+                "autotitle": autotitle,
             }
             if user_id:
                 payload["user_id"] = user_id

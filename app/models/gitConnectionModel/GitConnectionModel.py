@@ -7,7 +7,8 @@ class GitCloneSourceModel(BaseModel):
     id: str
     userdefined_name: str
     repo_url: str
-    branch: str
+    # None when the connection has no branch: the fetch then uses the default branch.
+    branch: str | None = None
     provider_code: str | None = None
     # SecretStr: hidden from print, repr and logs.
     token: SecretStr | None = None

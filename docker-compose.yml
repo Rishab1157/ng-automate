@@ -1,0 +1,46 @@
+# NG Automate's own dependencies, in one place:
+#   docker compose up -d                                 # MongoDB (our database) and Qdrant (the healer's memory)
+#   docker compose --profile build build sandbox-test    # the sandbox image the runner, healer and generator use
+#
+# Values come from .env (compose reads it for the ${...} below). Ports are bound to this machine only.
+# Not here, on purpose:
+# - QXcel's database: QXcel owns it and NG Automate only reads it (QXCEL_MONGO_URI).
+# - The models: Devstral (LLM_BASE_URL) and the embedding model (EMBEDDING_BASE_URL) run on their own Ollama servers.
+# - The API itself: it starts sandbox containers and mounts project folders from this machine; run it with
+#   `python main.py`.
+name: ng-automate
+
+services:
+  mongo:
+    image: mongo:9.0.2
+    container_name: ngauto-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${NGAUTO_MONGO_USER:-ngauto}
+      MONGO_INITDB_ROOT_PASSWORD: ${NGAUTO_MONGO_PASSWORD:?set NGAUTO_MONGO_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:27018:27017" # 27017 on this machine is the MongoDB service that holds QXcel's database
+    volumes:
+      - mongo-data:/data/db
+
+  qdrant:
+    image: qdrant/qdrant:v1.19.2
+    container_name: ngauto-qdrant
+    restart: unless-stopped
+    # No API key while the ports stay on this machine. When Qdrant is exposed, set QDRANT__SERVICE__API_KEY here
+    # and the same value as QDRANT_API_KEY in .env.
+    ports:
+      - "127.0.0.1:6333:6333" # REST API (used by the app) and the dashboard at /dashboard
+      - "127.0.0.1:6334:6334" # gRPC
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+  # Build only: a sandbox is started per agent session by the app, never by compose.
+  sandbox-test:
+    image: ng-automate/sandbox-test:1.53.0
+    build: docker/sandbox-test
+    profiles: ["build"]
+
+volumes:
+  mongo-data:
+  qdrant-data:

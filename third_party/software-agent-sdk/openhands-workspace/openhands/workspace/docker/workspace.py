@@ -18,6 +18,9 @@ from openhands.sdk.workspace import PlatformType, RemoteWorkspace
 
 logger = get_logger(__name__)
 
+# Session key variables that `session_api_key` replaces for one container.
+_SESSION_KEY_ENV_VARS = frozenset({"SESSION_API_KEY", "OH_SESSION_API_KEYS_0"})
+
 
 def check_port_available(port: int) -> bool:
     """Check if a port is available for binding."""
@@ -125,6 +128,20 @@ class DockerWorkspace(RemoteWorkspace):
         gt=0.0,
         description="Timeout in seconds to wait for container health check to pass.",
     )
+    session_api_key: str | None = Field(
+        default=None,
+        description=(
+            "Session API key for this container's agent server only. When set, it "
+            "is passed to this container instead of the session key variables in "
+            "the process environment, and this client authenticates with it. Use a "
+            "different key per container when several run side by side, so code in "
+            "one container cannot use its key against another container."
+        ),
+    )
+    extra_run_args: list[str] = Field(
+        default_factory=list,
+        description="Extra `docker run` arguments, e.g. ['--shm-size=1g'].",
+    )
 
     _container_id: str | None = PrivateAttr(default=None)
     _image_name: str | None = PrivateAttr(default=None)
@@ -208,8 +225,12 @@ class DockerWorkspace(RemoteWorkspace):
         # Prepare Docker run flags
         flags: list[str] = []
         for key in self.forward_env:
+            if self.session_api_key is not None and key in _SESSION_KEY_ENV_VARS:
+                continue  # this container gets its own key below
             if key in os.environ:
                 flags += ["-e", f"{key}={os.environ[key]}"]
+        if self.session_api_key is not None:
+            flags += ["-e", f"OH_SESSION_API_KEYS_0={self.session_api_key}"]
 
         for volume in self.volumes:
             flags += ["-v", volume]
@@ -230,6 +251,8 @@ class DockerWorkspace(RemoteWorkspace):
         # Connect container to the specified Docker network
         if self.network:
             flags += ["--network", self.network]
+
+        flags += self.extra_run_args
 
         # Run container
         run_cmd = [
@@ -274,9 +297,11 @@ class DockerWorkspace(RemoteWorkspace):
         # env parser, and V0 `SESSION_API_KEY` is only a fallback used when V1
         # is absent). Both are forwarded into the container by `forward_env`,
         # so preferring V0 here would send a key the server rejects.
-        session_api_key = os.environ.get(
-            "OH_SESSION_API_KEYS_0", os.environ.get("SESSION_API_KEY")
-        )
+        session_api_key = self.session_api_key
+        if session_api_key is None:
+            session_api_key = os.environ.get(
+                "OH_SESSION_API_KEYS_0", os.environ.get("SESSION_API_KEY")
+            )
         object.__setattr__(self, "api_key", session_api_key)
 
         # Wait for container to be healthy

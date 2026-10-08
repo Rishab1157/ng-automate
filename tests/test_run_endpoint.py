@@ -1,3 +1,4 @@
+import json
 import random
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -15,7 +16,8 @@ from tests.test_run_service import seed_model_connection, seed_profile, seed_pro
 BASE = "/tx-agents/ng-automate/run"
 PROJECT_BASE = "/tx-agents/ng-automate/project"
 RUN_FIELDS = {
-    "id", "org_id", "project_id", "created_by", "model_connection_id", "status", "stage", "error", "profile_id",
+    "id", "org_id", "project_id", "created_by", "model_connection_id", "mode", "test_selector", "test_data_id", "run_scope", "status", "stage", "error", "profile_id",
+    "generation", "test_report",
     "created_at", "updated_at", "started_at", "finished_at",
 }
 EVENT_FIELDS = {"seq", "type", "level", "message", "data", "created_at"}
@@ -214,6 +216,161 @@ def test_run_shows_error_and_profile_but_never_internals(
     assert "c0ffee1234" not in response.text
 
 
+# ---------- test mode ----------
+
+def _attempt_doc(number: int, kind: str, heal: dict | None = None) -> dict:
+    return {
+        "number": number,
+        "result": {
+            "command": "mvn -B -ntp test", "exit_code": 0 if kind == "passed" else 1, "duration_seconds": 4.0,
+            "total": 1, "passed": 1 if kind == "passed" else 0, "failed": 0, "errors": 0, "skipped": 0,
+            "cases": [], "report_files": [], "output_tail": "[INFO] BUILD",
+            "classification": {"kind": kind, "healable": kind != "passed", "reason": kind, "evidence": []},
+        },
+        "heal": heal,
+    }
+
+
+def test_test_run_is_created_with_its_selector(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    project_id = seed_project(mongo, org_id)
+    profile_id = seed_profile(mongo, org_id, project_id, datetime.now(UTC))
+
+    response = client.post(
+        f"{BASE}/", headers=auth_headers(org_id), json={"project_id": project_id, "mode": "test", "test_selector": "@smoke"}
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert (body["mode"], body["test_selector"], body["profile_id"]) == ("test", "@smoke", profile_id)
+    assert body["test_report"] is None
+    assert executor.submitted == [body["id"]]
+
+
+@pytest.mark.parametrize(
+    ("body", "status"),
+    [({"mode": "deploy"}, 422), ({"mode": "test", "test_selector": "x" * 201}, 422), ({"mode": "test", "test_selector": "a;b"}, 400)],
+)
+def test_bad_test_settings_are_rejected(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str,
+    body: dict, status: int,
+) -> None:
+    response = client.post(f"{BASE}/", headers=auth_headers(org_id), json={"project_id": seed_project(mongo, org_id), **body})
+
+    assert response.status_code == status
+    assert _error(response)["code"] == "INVALID_INPUT"
+    assert executor.submitted == []
+
+
+def test_tests_endpoint_lists_every_attempt_with_the_healer_diffs(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    run_id = _create_run(client, auth_headers(org_id), seed_project(mongo, org_id)).json()["id"]
+    heal = {"summary": "Set TestNG to 7.10.2", "violations": [], "reverted_files": [],
+            "changes": [{"path": "pom.xml", "change": "modified", "diff": "-99.0.0\n+7.10.2"}]}
+    report = {"outcome": "passed", "stop_reason": "passed", "detail": None, "runs": 2, "heals": 1, "total": 1,
+              "passed": 1, "failed": 0, "errors": 0, "skipped": 0, "changed_files": ["pom.xml"]}
+    _db(mongo).runs.update_one({"_id": ObjectId(run_id)}, {"$set": {
+        "outputs.test_attempts": [_attempt_doc(1, "dependency_failure", heal), _attempt_doc(2, "passed")],
+        "outputs.test_report": report,
+    }})
+
+    tests = client.get(f"{BASE}/{run_id}/tests", headers=auth_headers(org_id))
+    run = client.get(f"{BASE}/{run_id}", headers=auth_headers(org_id))
+    other = client.get(f"{BASE}/{run_id}/tests", headers=auth_headers(str(ObjectId())))
+
+    assert tests.status_code == 200
+    [first, second] = tests.json()
+    assert first["result"]["classification"]["kind"] == "dependency_failure"
+    assert first["heal"]["changes"][0]["diff"] == "-99.0.0\n+7.10.2"
+    assert second["heal"] is None
+    assert run.json()["test_report"] == report
+    assert other.status_code == 404
+
+
+def test_tests_endpoint_is_empty_before_the_tests_ran(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    run_id = _create_run(client, auth_headers(org_id), seed_project(mongo, org_id)).json()["id"]
+
+    response = client.get(f"{BASE}/{run_id}/tests", headers=auth_headers(org_id))
+
+    assert (response.status_code, response.json()) == (200, [])
+
+
+def _upload_test_data(client: TestClient, headers: dict[str, str], project_id: str) -> str:
+    cases = [{"id": "LOGIN-1", "title": "Valid login", "steps": [{"action": "open", "target": "https://shop.example"}]}]
+    response = client.post(
+        f"{PROJECT_BASE}/{project_id}/test-data", headers=headers,
+        files={"file": ("cases.json", json.dumps(cases).encode(), "application/json")},
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def test_generate_run_is_created_with_its_test_data(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers = auth_headers(org_id)
+    project_id = seed_project(mongo, org_id)
+    test_data_id = _upload_test_data(client, headers, project_id)
+
+    response = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id, "mode": "generate", "test_data_id": test_data_id})
+
+    assert response.status_code == 202
+    body = response.json()
+    assert (body["mode"], body["test_data_id"], body["generation"]) == ("generate", test_data_id, None)
+    assert executor.submitted == [body["id"]]
+
+
+def test_generate_run_needs_test_data_of_the_same_project(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers = auth_headers(org_id)
+    project_id = seed_project(mongo, org_id)
+    other_data = _upload_test_data(client, headers, seed_project(mongo, org_id))
+
+    missing = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id, "mode": "generate"})
+    other = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id, "mode": "generate", "test_data_id": other_data})
+    malformed = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id, "mode": "generate", "test_data_id": "x"})
+
+    assert (missing.status_code, _error(missing)["message"]) == (400, ErrorMessages.TEST_DATA_REQUIRED)
+    assert (other.status_code, _error(other)["message"]) == (404, ErrorMessages.TEST_DATA_NOT_FOUND)
+    assert malformed.status_code == 422
+    assert executor.submitted == []
+
+
+def test_generate_run_needs_at_least_one_case_with_its_locators(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers = auth_headers(org_id)
+    project_id = seed_project(mongo, org_id)
+    cases = [{"id": "LOGOUT-1", "title": "Logout", "steps": [{"action": "click"}]}]
+    test_data_id = client.post(
+        f"{PROJECT_BASE}/{project_id}/test-data", headers=headers,
+        files={"file": ("cases.json", json.dumps(cases).encode(), "application/json")},
+    ).json()["id"]
+
+    response = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id, "mode": "generate", "test_data_id": test_data_id})
+
+    assert (response.status_code, _error(response)["message"]) == (400, ErrorMessages.NO_RUNNABLE_TEST_CASES)
+    assert executor.submitted == []
+
+
+def test_test_data_is_ignored_outside_generate_mode(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers = auth_headers(org_id)
+    project_id = seed_project(mongo, org_id)
+    test_data_id = _upload_test_data(client, headers, project_id)
+
+    response = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id, "test_data_id": test_data_id})
+
+    assert response.status_code == 202
+    assert response.json()["test_data_id"] is None
+
+
 # ---------- events ----------
 
 def _seed_events(mongo: MongoClient, run_id: str, org_id: str, count: int) -> None:
@@ -331,7 +488,15 @@ def test_profile_of_another_orgs_project_is_not_found(
 
 # ---------- auth ----------
 
-@pytest.mark.parametrize(("method", "path"), [("post", "/"), ("get", "/0123456789abcdef01234567"), ("get", "/0123456789abcdef01234567/events")])
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("post", "/"),
+        ("get", "/0123456789abcdef01234567"),
+        ("get", "/0123456789abcdef01234567/events"),
+        ("get", "/0123456789abcdef01234567/tests"),
+    ],
+)
 def test_run_endpoints_need_a_token(client: TestClient, executor: FakeRunExecutor, method: str, path: str) -> None:
     response = client.request(method, f"{BASE}{path}", json={"project_id": str(ObjectId())})
 

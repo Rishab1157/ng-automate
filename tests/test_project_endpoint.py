@@ -158,9 +158,10 @@ def test_unsafe_repo_urls_are_refused(
 def test_branch_that_looks_like_an_option_is_refused(
     client: TestClient, auth_headers: AuthHeaders, add_git_connection: Callable[..., str], org_id: str
 ) -> None:
-    response = _create_from_git(client, auth_headers(org_id), add_git_connection(org_id), branch="--upload-pack=x")
+    response = _create_from_git(client, auth_headers(org_id), add_git_connection(org_id, branch="--upload-pack=x"))
 
     assert response.status_code == 422
+    assert _error(response)["code"] == "GIT_FETCH_FAILED"
 
 
 def test_malformed_git_connection_id_fails_validation(client: TestClient, auth_headers: AuthHeaders, org_id: str) -> None:
@@ -191,7 +192,7 @@ def test_public_repo_becomes_a_project(
 def test_missing_branch_is_reported(
     client: TestClient, auth_headers: AuthHeaders, add_git_connection: Callable[..., str], org_id: str
 ) -> None:
-    response = _create_from_git(client, auth_headers(org_id), add_git_connection(org_id), branch="no-such-branch")
+    response = _create_from_git(client, auth_headers(org_id), add_git_connection(org_id, branch="no-such-branch"))
 
     assert response.status_code == 422
     assert "was not found" in _error(response)["message"]

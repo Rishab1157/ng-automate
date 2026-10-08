@@ -22,7 +22,19 @@ from app.models.analyzerModel import (
 )
 from app.models.projectModel import ArchiveModel, ProjectMapper, ProjectSource
 from app.models.projectProfileModel import ProjectProfileMapper
-from app.models.runModel import RunEventLevel, RunEventType, RunOutputsModel, RunStage, RunStatus
+from app.models.healerModel import FileChangeModel, HealOutcomeModel
+from app.models.runModel import (
+    RunEventLevel,
+    RunEventType,
+    RunMode,
+    RunOutputsModel,
+    RunStage,
+    RunStatus,
+    TestAttemptModel,
+    TestReportModel,
+    TestStopReason,
+)
+from app.models.testRunModel import FailureClassificationModel, FailureKind, TestCommandModel, TestRunResultModel
 from app.services.projectProfileService import ProjectProfileService
 from app.services.runService import RunService
 from app.services.runService.RunService import _OUTPUT_DUMPERS
@@ -141,6 +153,82 @@ async def test_create_run_inserts_a_queued_run(app_db: MongoClient, org_id: str)
     assert doc["org_id"] == ObjectId(org_id)
     assert doc["project_id"] == ObjectId(project_id)
     assert doc["event_seq"] == 0
+
+
+@pytest.mark.anyio
+async def test_new_run_is_an_analysis_by_default(app_db: MongoClient, org_id: str) -> None:
+    run_id = await _new_run(app_db, org_id)
+
+    doc = _runs(app_db).find_one({"_id": ObjectId(run_id)})
+    assert (doc["mode"], doc["test_selector"]) == ("analyze", None)
+
+
+@pytest.mark.anyio
+async def test_test_run_reuses_the_latest_profile(app_db: MongoClient, org_id: str) -> None:
+    project_id = seed_project(app_db, org_id)
+    now = datetime.now(UTC)
+    seed_profile(app_db, org_id, project_id, now - timedelta(days=1))
+    latest = seed_profile(app_db, org_id, project_id, now)
+
+    run = await RunService().create_run(
+        project_id=project_id, org_id=org_id, user_id=str(ObjectId()), model_connection_id=None,
+        mode=RunMode.TEST, test_selector="  @smoke  ",
+    )
+
+    assert (run.mode, run.test_selector, run.outputs.profile_id) == (RunMode.TEST, "@smoke", latest)
+    doc = _runs(app_db).find_one({"_id": ObjectId(run.id)})
+    assert doc["outputs"]["profile_id"] == ObjectId(latest)
+    assert (await RunService().get(run.id, org_id)).outputs.profile_id == latest
+
+
+@pytest.mark.anyio
+async def test_test_run_without_a_profile_analyzes_first(app_db: MongoClient, org_id: str) -> None:
+    run = await RunService().create_run(
+        project_id=seed_project(app_db, org_id), org_id=org_id, user_id=str(ObjectId()), model_connection_id=None,
+        mode=RunMode.TEST,
+    )
+
+    assert run.outputs.profile_id is None
+
+
+@pytest.mark.anyio
+async def test_unsafe_test_selector_is_rejected_before_the_run_exists(app_db: MongoClient, org_id: str) -> None:
+    with pytest.raises(ValidationError):
+        await RunService().create_run(
+            project_id=seed_project(app_db, org_id), org_id=org_id, user_id=str(ObjectId()), model_connection_id=None,
+            mode=RunMode.TEST, test_selector="LoginTest; rm -rf /",
+        )
+
+    assert _runs(app_db).count_documents({}) == 0
+
+
+@pytest.mark.anyio
+async def test_analysis_run_ignores_a_test_selector(app_db: MongoClient, org_id: str) -> None:
+    run = await RunService().create_run(
+        project_id=seed_project(app_db, org_id), org_id=org_id, user_id=str(ObjectId()), model_connection_id=None,
+        test_selector="LoginTest",
+    )
+
+    assert run.test_selector is None
+
+
+@pytest.mark.anyio
+async def test_test_outputs_round_trip(app_db: MongoClient, org_id: str) -> None:
+    run_id = await _new_run(app_db, org_id)
+    command = TestCommandModel(tool="maven", command="mvn -B -ntp test", report_globs=["target/surefire-reports/TEST-*.xml"])
+    result = TestRunResultModel(
+        command=command.command, exit_code=0, duration_seconds=3.5, total=1, passed=1, failed=0, errors=0, skipped=0,
+        classification=FailureClassificationModel(kind=FailureKind.PASSED, healable=False, reason="All tests passed"),
+    )
+    heal = HealOutcomeModel(summary="fixed", changes=[FileChangeModel(path="pom.xml", change="modified", diff="-a +b")])
+    attempts = [TestAttemptModel(number=1, result=result, heal=heal), TestAttemptModel(number=2, result=result)]
+    report = TestReportModel(outcome=FailureKind.PASSED, stop_reason=TestStopReason.PASSED, runs=2, heals=1,
+                             total=1, passed=1, failed=0, errors=0, skipped=0, changed_files=["pom.xml"])
+
+    await RunService().save_outputs(run_id, test_command=command, test_attempts=attempts, test_report=report)
+
+    outputs = (await RunService().get_by_id(run_id)).outputs
+    assert (outputs.test_command, outputs.test_attempts, outputs.test_report) == (command, attempts, report)
 
 
 @pytest.mark.anyio

@@ -24,6 +24,7 @@ from openhands.sdk.workspace import LocalWorkspace
 from openhands.tools.file_editor import FileEditorAction, FileEditorObservation
 from openhands.tools.glob import GlobAction, GlobObservation
 from openhands.tools.grep import GrepAction, GrepObservation
+from openhands.tools.terminal import TerminalAction, TerminalObservation
 from pydantic import SecretStr
 
 from app.agents.AnalyzerAgent.AgentEventMapper import (
@@ -371,6 +372,30 @@ def test_grep_observation_counts_matching_files() -> None:
     assert event is not None and event.message == "grep matched 1 file(s) (truncated)"
 
 
+def test_terminal_action_shows_the_command() -> None:
+    event = map_openhands_event(_action_event("terminal", TerminalAction(command="mvn -B -q -DskipTests compile")))
+
+    assert event is not None and event.message == "$ mvn -B -q -DskipTests compile"
+
+
+def test_terminal_observation_shows_the_exit_code() -> None:
+    observation = TerminalObservation.from_text("BUILD FAILURE", command="mvn compile", exit_code=1)
+
+    event = map_openhands_event(_observation_event("terminal", observation))
+
+    assert event is not None and event.message == "command exited with 1"
+    assert event.data["exit_code"] == 1
+    assert "BUILD FAILURE" in event.data["output"]
+
+
+def test_terminal_timeout_is_reported() -> None:
+    observation = TerminalObservation.from_text("still running", command="mvn test", exit_code=-1, timeout=True)
+
+    event = map_openhands_event(_observation_event("terminal", observation))
+
+    assert event is not None and event.message == "command timed out"
+
+
 def test_long_observation_output_is_truncated() -> None:
     observation = FileEditorObservation.from_text("x" * 50_000, command="view", path="/workspace/project/big.txt")
 
@@ -603,20 +628,64 @@ def test_invalid_answer_gets_one_repair_round(
     assert len(notices) == 1 and "asking the agent to correct it" in notices[0].message
 
 
-def test_second_invalid_answer_fails_the_analysis(
+def test_valid_on_the_second_repair_round(
     conversations: Callable[..., list[FakeConversation]], fact_sheet: FactSheetModel, tmp_path: Path
 ) -> None:
     missing_key = _answer()
     del missing_key["reporting_tools"]
-    created = conversations("No JSON here.", _fenced(missing_key))
+    created = conversations("No JSON here.", _fenced(missing_key), _fenced(_answer()))
+    events: list[AgentEvent] = []
+
+    findings = AnalyzerAgent(_llm_config(), repair_attempts=2).analyze(
+        LocalWorkspace(working_dir=str(tmp_path)), fact_sheet, events.append
+    )
+
+    assert findings.test_command.value
+    assert len(created[0].messages) == 3
+    notices = [e.message for e in events if e.type == RunEventType.AGENT_ERROR]
+    assert "(attempt 1 of 2)" in notices[0] and "no JSON object" in notices[0]
+    assert "(attempt 2 of 2)" in notices[1] and "reporting_tools" in notices[1]
+
+
+def test_formatter_is_the_last_resort_and_its_output_is_validated(
+    conversations: Callable[..., list[FakeConversation]], fact_sheet: FactSheetModel, tmp_path: Path
+) -> None:
+    created = conversations("No JSON here.", "Still prose.", "Prose again.")
+    seen: list[str] = []
+
+    def formatter(answer: str):
+        seen.append(answer)
+        return parse_findings(_fenced(_answer()))
+
+    events: list[AgentEvent] = []
+    findings = AnalyzerAgent(_llm_config(), repair_attempts=2, formatter=formatter).analyze(
+        LocalWorkspace(working_dir=str(tmp_path)), fact_sheet, events.append
+    )
+
+    assert findings.test_command.value
+    assert seen == ["Prose again."]  # the agent's LAST answer is formatted
+    assert len(created[0].messages) == 3
+    assert any("strict JSON mode" in e.message for e in events)
+
+
+def test_everything_invalid_fails_the_analysis(
+    conversations: Callable[..., list[FakeConversation]], fact_sheet: FactSheetModel, tmp_path: Path
+) -> None:
+    missing_key = _answer()
+    del missing_key["reporting_tools"]
+    created = conversations("No JSON here.", _fenced(missing_key), _fenced(missing_key))
+
+    def formatter(answer: str):
+        raise ValueError("reporting_tools: Field required")
 
     with pytest.raises(AnalysisError) as raised:
-        AnalyzerAgent(_llm_config()).analyze(LocalWorkspace(working_dir=str(tmp_path)), fact_sheet)
+        AnalyzerAgent(_llm_config(), repair_attempts=2, formatter=formatter).analyze(
+            LocalWorkspace(working_dir=str(tmp_path)), fact_sheet
+        )
 
     assert raised.value.error_code == ErrorCode.ANALYSIS_FAILED
     assert raised.value.message.startswith("The analyzer could not produce a valid profile: ")
     assert "reporting_tools" in raised.value.message
-    assert len(created[0].messages) == 2
     assert created[0].closed
 
 

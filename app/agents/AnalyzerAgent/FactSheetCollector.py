@@ -82,11 +82,14 @@ NON_PROGRAMMING_LANGUAGES = frozenset({GHERKIN})
 # UFT/QTP tests (.tsp), function libraries (.qfl) and shared object repositories (.tsr).
 # .usr is left out on purpose: LoadRunner scripts have it too.
 UFT_MARKER_EXTENSIONS = frozenset({".tsp", ".qfl", ".tsr"})
+# Mobile app builds a mobile test project installs on the device: markers, not proof of a tool.
+MOBILE_APP_EXTENSIONS = frozenset({".apk", ".aab", ".ipa"})
 # UFT keeps each action's VBScript in Action<N>/Script.mts; any other .mts file is TypeScript.
 UFT_ACTION_DIR = re.compile(r"action\d+", re.IGNORECASE)
 
 # Every name the rules below can find belongs to at least one of these facts.
 TEST_FRAMEWORKS = frozenset({
+    "pytest-playwright",
     "TestNG", "JUnit 4", "JUnit 5", "Spock", "pytest", "unittest", ROBOT_FRAMEWORK, "Jest", "Mocha", "Jasmine",
     "Vitest", "Playwright Test", "Cypress", "WebdriverIO", "TestCafe", "Nightwatch", "NUnit", "xUnit", "MSTest",
     "RSpec", "Minitest", "Ginkgo",
@@ -147,6 +150,13 @@ FRAMEWORK_FILES: dict[str, tuple[str, ...]] = {
     "cypress.json": ("Cypress",),
     "wdio.conf.*": ("WebdriverIO",),
     "wdio.*.conf.*": ("WebdriverIO",),
+    # Appium capability files (desired capabilities for a device and app).
+    "capabilities*.json": ("Appium",),
+    "*.capabilities.json": ("Appium",),
+    "*.caps.json": ("Appium",),
+    "caps.json": ("Appium",),
+    "desired_caps*.json": ("Appium",),
+    "desiredcapabilities*.json": ("Appium",),
     "jest.config.*": ("Jest",),
     ".mocharc*": ("Mocha",),
     "vitest.config.*": ("Vitest",),
@@ -258,7 +268,7 @@ PYTHON_PACKAGES: dict[str, tuple[str, ...]] = {
     "seleniumbase": ("Selenium",),
     "pytest-selenium": ("Selenium",),
     "playwright": ("Playwright",),
-    "pytest-playwright": ("Playwright",),
+    "pytest-playwright": ("Playwright", "pytest-playwright"),
     "appium-python-client": ("Appium",),
     "behave": ("Behave",),
     "pytest-bdd": ("pytest-bdd",),
@@ -475,6 +485,8 @@ def _add_file(scan: _Scan, path: str, name: str, in_uft_action: bool) -> None:
             examples.append(path)
     if extension in UFT_MARKER_EXTENSIONS:
         scan.hits.append(_Hit(UFT, path))
+        scan.marker_files.add(path)
+    if extension in MOBILE_APP_EXTENSIONS:
         scan.marker_files.add(path)
 
     if build_tool := _BUILD_TOOL_RULES.get(name):

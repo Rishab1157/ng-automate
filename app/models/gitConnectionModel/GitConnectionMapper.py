@@ -15,7 +15,7 @@ class GitConnectionMapper:
             id=str(doc["_id"]),
             userdefined_name=doc.get("userdefined_name") or "",
             repo_url=doc["repo_url"],
-            branch=doc.get("branch") or "main",
+            branch=(doc.get("branch") or "").strip() or None,
             provider_code=doc.get("provider_code") or provider.get("provider_code"),
             token=SecretStr(token) if token else None,
         )

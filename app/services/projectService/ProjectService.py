@@ -64,7 +64,6 @@ class ProjectService:
         self,
         *,
         git_connection_id: str,
-        branch: str | None,
         name: str | None,
         org_id: str,
         user_id: str,
@@ -74,7 +73,7 @@ class ProjectService:
         with DiscardOnError(self.storage, project_id):
             path = self.storage.archive_path(str(project_id))
             fetched = await asyncio.to_thread(
-                self.git_fetch_service.fetch_to_archive, source, branch or source.branch, path, self.storage.max_bytes
+                self.git_fetch_service.fetch_to_archive, source, path, self.storage.max_bytes
             )
             archive = await asyncio.to_thread(inspect_archive, path, self.storage.max_bytes)
             db_model = ProjectMapper.to_create_db_model(

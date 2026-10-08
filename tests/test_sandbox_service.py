@@ -12,8 +12,9 @@ from bson import ObjectId
 from app.core.exceptions import ErrorCode, ErrorMessages, NotFoundError, SandboxError, ValidationError
 from app.services.sandboxService import SandboxService, SandboxSession
 from app.services.sandboxService.SandboxService import (
+    NETWORK_ICC_OPTION,
     SANDBOX_PROJECT_DIR,
-    SESSION_KEY_ENV,
+    LiveViewError,
     _SandboxDockerWorkspace,
 )
 from openhands.workspace import DockerWorkspace
@@ -78,9 +79,11 @@ class FakeDocker:
     def __init__(self, *answers: subprocess.CompletedProcess[str] | Exception) -> None:
         self.answers = list(answers)
         self.calls: list[list[str]] = []
+        self.inputs: list[str | None] = []
 
-    def __call__(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+    def __call__(self, args: list[str], input: str | None = None) -> subprocess.CompletedProcess[str]:
         self.calls.append(args)
+        self.inputs.append(input)
         answer = self.answers.pop(0) if self.answers else _completed()
         if isinstance(answer, Exception):
             raise answer
@@ -91,7 +94,7 @@ def _completed(returncode: int = 0, stderr: str = "") -> subprocess.CompletedPro
     return subprocess.CompletedProcess(args=["docker"], returncode=returncode, stdout="", stderr=stderr)
 
 
-def _service(tmp_path: Path, factory: Callable[..., Any] | None = None) -> SandboxService:
+def _service(tmp_path: Path, factory: Callable[..., Any] | None = None, network: str | None = None) -> SandboxService:
     return SandboxService(
         image="test-image:1",
         cpus=1.5,
@@ -99,6 +102,7 @@ def _service(tmp_path: Path, factory: Callable[..., Any] | None = None) -> Sandb
         startup_timeout_seconds=30,
         data_dir=tmp_path / "data",
         workspace_factory=factory or FakeWorkspaceFactory(),
+        network=network,
     )
 
 
@@ -221,13 +225,17 @@ def test_open_readonly_mounts_the_project_read_only(
         assert session.container_id == CONTAINER_ID
         assert session.workspace is factory.workspace
 
-    assert factory.calls == [{
+    [call] = factory.calls
+    session_key = call.pop("session_api_key")
+    assert call == {
         "server_image": "test-image:1",
         "working_dir": SANDBOX_PROJECT_DIR,
         "volumes": [f"{project_dir.resolve()}:/workspace/project:ro"],
         "detach_logs": False,
         "health_check_timeout": 30,
-    }]
+        "network": None,
+    }
+    assert len(session_key) >= 40
     assert SANDBOX_PROJECT_DIR == "/workspace/project"
 
 
@@ -482,44 +490,112 @@ def test_remove_run_dir_ignores_unexpected_ids(service: SandboxService, run_id: 
 
 # ---------- configuration ----------
 
-def test_session_key_is_created_when_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(SESSION_KEY_ENV, raising=False)
-
-    _service(tmp_path)
-
-    assert len(os.environ[SESSION_KEY_ENV]) >= 40
-
-
-def test_existing_session_key_is_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(SESSION_KEY_ENV, "key-chosen-by-the-operator-0123456789")
-
-    _service(tmp_path)
-
-    assert os.environ[SESSION_KEY_ENV] == "key-chosen-by-the-operator-0123456789"
-
-
-def test_empty_session_key_is_replaced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(SESSION_KEY_ENV, "")
-
-    _service(tmp_path)
-
-    assert len(os.environ[SESSION_KEY_ENV]) >= 40
-
-
-def test_sdk_command_log_does_not_show_the_session_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+def test_every_sandbox_gets_its_own_session_key(
+    service: SandboxService, factory: FakeWorkspaceFactory, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv(SESSION_KEY_ENV, "super-secret-session-key-0123456789")
-    _service(tmp_path)
-    _service(tmp_path)  # the log filter is installed once
+    project_dir = _project_dir(tmp_path)
+
+    with service.open_readonly(project_dir):
+        pass
+    with service.open_readonly(project_dir):
+        pass
+
+    first, second = (call["session_api_key"] for call in factory.calls)
+    assert first != second
+    assert len(first) >= 40 and len(second) >= 40
+
+
+def test_session_keys_are_hidden_from_logs_while_the_sandbox_runs(
+    service: SandboxService, factory: FakeWorkspaceFactory, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     sdk_logger = logging.getLogger("openhands.sdk.utils.command")
 
     with caplog.at_level(logging.INFO, logger=sdk_logger.name):
-        sdk_logger.info("$ %s", f"docker run -d -e {SESSION_KEY_ENV}=super-secret-session-key-0123456789 test-image:1")
+        with service.open_readonly(_project_dir(tmp_path)):
+            key = factory.calls[0]["session_api_key"]
+            sdk_logger.info("$ %s", f"docker run -d -e OH_SESSION_API_KEYS_0={key} test-image:1")
+            sdk_logger.info("health check with key %s", key)
 
-    assert "super-secret-session-key" not in caplog.text
-    assert f"{SESSION_KEY_ENV}=***" in caplog.text
+    assert key not in caplog.text
+    assert "OH_SESSION_API_KEYS_0=***" in caplog.text
+    assert "health check with key ***" in caplog.text
     assert sum(type(f).__name__ == "_HideSessionKey" for f in sdk_logger.filters) == 1
+
+
+def test_any_session_key_in_a_command_line_is_hidden(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    _service(tmp_path)
+    sdk_logger = logging.getLogger("openhands.sdk.utils.command")
+
+    with caplog.at_level(logging.INFO, logger=sdk_logger.name):
+        sdk_logger.info("$ %s", "docker run -e OH_SESSION_API_KEYS_3=leaked-value -e SESSION_API_KEY=old-value img")
+
+    assert "leaked-value" not in caplog.text and "old-value" not in caplog.text
+
+
+# ---------- isolated network ----------
+
+def _network_service(tmp_path: Path, factory: FakeWorkspaceFactory, docker: "FakeDocker", monkeypatch: pytest.MonkeyPatch) -> SandboxService:
+    service = _service(tmp_path, factory, network="ngauto-test-net")
+    monkeypatch.setattr(service, "_run_docker", docker)
+    return service
+
+
+def _inspected(options: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    import json
+
+    return subprocess.CompletedProcess(args=["docker"], returncode=0, stdout=json.dumps(options) + "\n", stderr="")
+
+
+def test_missing_network_is_created_without_inter_container_traffic(
+    tmp_path: Path, factory: FakeWorkspaceFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docker = FakeDocker(
+        _completed(1, "Error: No such network: ngauto-test-net"),  # inspect
+        _completed(),  # create
+        _inspected({NETWORK_ICC_OPTION: "false"}),  # inspect again
+    )
+    service = _network_service(tmp_path, factory, docker, monkeypatch)
+
+    project_dir = _project_dir(tmp_path)
+    with service.open_readonly(project_dir):
+        pass
+    with service.open_readonly(project_dir):
+        pass
+
+    create = docker.calls[1]
+    assert create[:2] == ["network", "create"]
+    assert f"{NETWORK_ICC_OPTION}=false" in create
+    assert create[-1] == "ngauto-test-net"
+    assert [call["network"] for call in factory.calls] == ["ngauto-test-net", "ngauto-test-net"]
+    # Checked once per service, not per sandbox.
+    assert sum(call[:2] == ["network", "inspect"] for call in docker.calls) == 2
+
+
+def test_existing_network_that_allows_inter_container_traffic_is_refused(
+    tmp_path: Path, factory: FakeWorkspaceFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _network_service(tmp_path, factory, FakeDocker(_inspected({})), monkeypatch)
+
+    with pytest.raises(SandboxError) as caught:
+        with service.open_readonly(_project_dir(tmp_path)):
+            pass
+
+    assert "its network is not isolated" in caught.value.message
+    assert factory.calls == []
+
+
+def test_network_that_cannot_be_created_stops_the_sandbox(
+    tmp_path: Path, factory: FakeWorkspaceFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docker = FakeDocker(_completed(1, "Error: No such network"), _completed(1, "Error response from daemon: pool overlaps"))
+    service = _network_service(tmp_path, factory, docker, monkeypatch)
+
+    with pytest.raises(SandboxError) as caught:
+        with service.open_readonly(_project_dir(tmp_path)):
+            pass
+
+    assert "its network could not be created" in caught.value.message
+    assert factory.calls == []
 
 
 @pytest.mark.parametrize("field", ["cpus", "memory_mb", "startup_timeout_seconds"])
@@ -557,3 +633,93 @@ def test_real_sandbox_reads_but_cannot_write_the_project(tmp_path: Path) -> None
     assert not (project_dir / "new.txt").exists()
     assert limits.stdout.split() == [str(10**9), str(1024 * 1024 * 1024), str(1024 * 1024 * 1024)]
     service.stop_container(session.container_id)  # already stopped and removed: not an error
+
+
+
+# ---------- test sandboxes and their live view ----------
+
+ORG_ID = str(ObjectId())
+
+
+def test_test_sandbox_publishes_the_live_view_port_and_gets_shared_memory(
+    service: SandboxService, factory: FakeWorkspaceFactory, tmp_path: Path
+) -> None:
+    project_dir = _project_dir(tmp_path)
+
+    with service.open_writable(project_dir, ORG_ID):
+        pass
+    with service.open_readonly(project_dir):
+        pass
+
+    writable, readonly = factory.calls
+    assert writable["extra_ports"] is True
+    assert writable["extra_run_args"] == ["--shm-size=1g"]
+    assert writable["volumes"][0].endswith(":/workspace/project:rw")
+    # Build caches are per organization.
+    assert any(volume.startswith(f"ngauto-maven-{ORG_ID}:") for volume in writable["volumes"])
+    assert "extra_ports" not in readonly and "extra_run_args" not in readonly
+
+
+def test_live_view_token_goes_to_the_container_on_stdin(service: SandboxService, docker: FakeDocker) -> None:
+    interactive = service.add_live_view_token(CONTAINER_ID, interactive=True)
+    view_only = service.add_live_view_token(CONTAINER_ID, interactive=False)
+
+    assert interactive != view_only and len(interactive) >= 40
+    assert docker.inputs == [f"{interactive}: 127.0.0.1:5900\n", f"{view_only}: 127.0.0.1:5901\n"]
+    for call in docker.calls:
+        assert call[:2] == ["exec", "-i"] and CONTAINER_ID in call
+        assert interactive not in " ".join(call) and view_only not in " ".join(call)
+
+
+def test_live_view_token_needs_a_running_display(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    service = _service(tmp_path)
+    monkeypatch.setattr(service, "_run_docker", FakeDocker(_completed(3)))
+
+    with pytest.raises(LiveViewError, match="display is not running"):
+        service.add_live_view_token(CONTAINER_ID, interactive=True)
+
+
+@pytest.mark.parametrize(
+    ("answer", "port"),
+    [
+        (subprocess.CompletedProcess(args=["docker"], returncode=0, stdout="127.0.0.1:30125\n", stderr=""), 30125),
+        (subprocess.CompletedProcess(args=["docker"], returncode=1, stdout="", stderr="no public port"), None),
+        (subprocess.TimeoutExpired(cmd="docker", timeout=60), None),
+    ],
+)
+def test_live_view_port(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: Any, port: int | None) -> None:
+    service = _service(tmp_path)
+    docker = FakeDocker(answer)
+    monkeypatch.setattr(service, "_run_docker", docker)
+
+    assert service.live_view_port(CONTAINER_ID) == port
+    assert docker.calls[0] == ["port", "--", CONTAINER_ID, "8001/tcp"]
+
+
+def test_live_view_methods_refuse_values_that_are_not_container_ids(service: SandboxService) -> None:
+    with pytest.raises(ValueError):
+        service.add_live_view_token("-x; rm -rf /", interactive=True)
+    with pytest.raises(ValueError):
+        service.live_view_port("--help")
+
+
+def test_sandbox_starts_again_when_its_port_was_taken_in_the_meantime(tmp_path: Path) -> None:
+    factory = FakeWorkspaceFactory(error=RuntimeError("Port 30125 is not available"))
+    service = _service(tmp_path, factory)
+    calls: list[dict[str, Any]] = []
+    original = factory.__call__
+
+    def flaky(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise RuntimeError("Port 30125 is not available")
+        factory.error = None
+        return original(**kwargs)
+
+    service.workspace_factory = flaky  # type: ignore[assignment]
+    service._run_docker = FakeDocker()  # type: ignore[method-assign]
+
+    with service.open_writable(_project_dir(tmp_path), ORG_ID) as session:
+        assert session.container_id == CONTAINER_ID
+
+    assert len(calls) == 2

@@ -9,8 +9,10 @@ from .RunModel import (
     RunEventLevel,
     RunEventModel,
     RunEventType,
+    RunMode,
     RunModel,
     RunOutputsModel,
+    RunScope,
     RunStage,
     RunStatus,
 )
@@ -19,7 +21,16 @@ from .RunModel import (
 class RunMapper:
     @staticmethod
     def to_create_db_model(
-        *, org_id: str, project_id: str, user_id: str, model_connection_id: str | None
+        *,
+        org_id: str,
+        project_id: str,
+        user_id: str,
+        model_connection_id: str | None,
+        mode: RunMode = RunMode.ANALYZE,
+        test_selector: str | None = None,
+        test_data_id: str | None = None,
+        run_scope: RunScope = RunScope.GENERATED,
+        outputs: dict[str, Any] | None = None,
     ) -> RunCreateDbModel:
         now = datetime.now(UTC)
         return RunCreateDbModel(
@@ -27,6 +38,11 @@ class RunMapper:
             project_id=ObjectId(project_id),
             created_by=ObjectId(user_id),
             model_connection_id=ObjectId(model_connection_id) if model_connection_id else None,
+            mode=RunMode(mode).value,
+            test_selector=test_selector,
+            test_data_id=ObjectId(test_data_id) if test_data_id else None,
+            run_scope=RunScope(run_scope).value,
+            outputs=outputs or {},
             status=RunStatus.QUEUED.value,
             stage=RunStage.QUEUED.value,
             created_at=now,
@@ -46,6 +62,11 @@ class RunMapper:
             project_id=str(doc["project_id"]),
             created_by=str(doc["created_by"]),
             model_connection_id=str(model_connection_id) if model_connection_id else None,
+            # Runs created before modes existed were analysis runs.
+            mode=RunMode(doc.get("mode") or RunMode.ANALYZE.value),
+            test_selector=doc.get("test_selector"),
+            test_data_id=str(doc["test_data_id"]) if doc.get("test_data_id") else None,
+            run_scope=RunScope(doc.get("run_scope") or RunScope.GENERATED.value),
             status=RunStatus(doc["status"]),
             stage=RunStage(doc["stage"]),
             outputs=RunOutputsModel.model_validate(outputs),

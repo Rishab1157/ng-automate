@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -20,6 +21,8 @@ from app.core.exceptions import (
 from app.core.logging_config import setup_logging
 from app.db.indexes import ensure_indexes
 from app.db.mongo import close_client, ping
+from app.db.qdrant import close_qdrant_client
+from app.services.testDataService import test_data_processor
 
 logger = logging.getLogger(__name__)
 
@@ -31,23 +34,41 @@ Endpoints work in your own organization; `?target_org_id=` needs `NGAUTOMATE:ACC
 """
 
 
+def _load_agent_libraries() -> None:
+    """The agents' libraries (OpenHands, LiteLLM, LangGraph) take ~10 s to import. Loading them in the background
+    right after startup keeps the API responsive and the first run from stalling the event loop."""
+    try:
+        import app.agents.MasterAgent.MasterGraph  # noqa: F401
+        import app.agents.MasterAgent.MasterNodes  # noqa: F401
+        import app.agents.TestGeneratorAgent.TestCaseExtractor  # noqa: F401
+    except Exception:
+        logger.exception("Could not preload the agent libraries; they load on first use instead")
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     setup_logging()
+    preload = asyncio.get_running_loop().run_in_executor(None, _load_agent_libraries)
     if await ping():
         await ensure_indexes()
         try:
             resumed = await run_executor.resume_interrupted()
             logger.info("Resumed %d interrupted run(s)", resumed)
+            reading = await test_data_processor.resume_processing()
+            if reading:
+                logger.info("Reading %d test-data source(s) again", reading)
         except Exception:
             # The API still starts; the runs stay unfinished and are resumed on the next start.
             logger.exception("Could not resume interrupted runs")
     else:
         logger.warning("MongoDB not reachable at startup (%s)", settings.MONGO_DATABASE)
     yield
+    await preload
     # Running runs stop unfinished (they resume on the next start) before the database client goes away.
     await run_executor.shutdown()
+    await test_data_processor.shutdown()
     await close_client()
+    await close_qdrant_client()
 
 
 app = FastAPI(

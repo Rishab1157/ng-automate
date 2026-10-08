@@ -53,6 +53,33 @@ class SandboxError(NgAutomateException):
         super().__init__(message, ErrorCode.SANDBOX_FAILED, status_code=503, details=details)
 
 
+class RunNotActiveError(NgAutomateException):
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message, ErrorCode.RUN_NOT_ACTIVE, status_code=409, details=details)
+
+
+class LiveViewUnavailableError(NgAutomateException):
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message, ErrorCode.LIVE_VIEW_UNAVAILABLE, status_code=409, details=details)
+
+
 class AnalysisError(NgAutomateException):
     def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__(message, ErrorCode.ANALYSIS_FAILED, status_code=422, details=details)
+
+
+class HealError(NgAutomateException):
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message, ErrorCode.HEAL_FAILED, status_code=422, details=details)
+
+
+class GenerationError(NgAutomateException):
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message, ErrorCode.GENERATION_FAILED, status_code=422, details=details)
+
+
+class TestRunError(NgAutomateException):
+    __test__ = False  # not a pytest test class
+
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message, ErrorCode.TEST_RUN_FAILED, status_code=422, details=details)

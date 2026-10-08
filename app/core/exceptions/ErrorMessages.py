@@ -42,13 +42,35 @@ class ErrorMessages:
 
     # Runs
     RUN_NOT_FOUND = "Run not found"
+    RUN_NOT_ACTIVE = "The run is {status}: it no longer takes commands"
+    RUN_STOPPED_BY_USER = "Stopped by the user"
+    RUN_PAUSED_TOO_LONG = "Stopped: the run was paused for longer than {minutes} minutes"
+    COMMAND_TEXT_REQUIRED = "A message needs text"
+    COMMAND_TEXT_TOO_LONG = "A message can be at most {limit} characters"
     PROFILE_NOT_FOUND = "This project has no profile yet: start an analysis run first"
+
+    # Test data
+    TEST_DATA_NOT_FOUND = "Test data not found for this project"
+    TEST_DATA_NOT_READY = "The test data is not ready (status: {status}): wait until it has been read"
+    TEST_DATA_RETRY_NOT_ALLOWED = "Only test data that failed to be read can be read again"
+    TEST_DATA_READ_FAILED = "The test data could not be turned into test cases: {reason}"
+    TEST_DATA_REQUIRED = "A generate run needs test_data_id: upload test data for the project first"
+    NO_RUNNABLE_TEST_CASES = "None of the test cases can be generated: every one has a step without a locator"
 
     # Sandbox
     SANDBOX_FAILED = "The sandbox could not be started: {reason}"
 
+    # Live view
+    LIVE_VIEW_NO_SANDBOX = "There is nothing to watch: the run has no test sandbox running right now"
+    LIVE_VIEW_NOT_FOUND = "Live view not found or expired: ask for a new one"
+
     # Analyzer
     ANALYSIS_FAILED = "The analyzer could not produce a valid profile: {reason}"
+
+    # Runner and healer
+    HEAL_FAILED = "The healer stopped: {reason}"
+    TEST_RUN_FAILED = "The tests could not be run: {reason}"
+    GENERATION_FAILED = "The test generator stopped: {reason}"
 
     # Generic
     INTERNAL_ERROR = "An unexpected error occurred"

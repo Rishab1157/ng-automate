@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.142.2",
+    "httpx>=0.28.1",
     "langgraph>=1.2.14",
     "openhands-sdk>=1.53.0",
     "openhands-tools>=1.53.0",
@@ -14,6 +15,7 @@ dependencies = [
     "pyjwt>=2.15.1",
     "pymongo>=4.18.2",
     "python-multipart>=0.0.32",
+    "qdrant-client>=1.19.1",
     "uvicorn[standard]>=0.54.0",
 ]
 
@@ -39,6 +41,8 @@ langgraph-sdk = { path = "third_party/langgraph/libs/sdk-py", editable = true }
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# Models like TestCaseStatus / TestRunResultModel are not test classes.
+filterwarnings = ["ignore:cannot collect test class:pytest.PytestCollectionWarning"]
 markers = [
     "network: needs internet access (clones a public GitHub repository)",
     "docker: starts real Docker containers (set NGAUTOMATE_DOCKER_TESTS=1 to run)",

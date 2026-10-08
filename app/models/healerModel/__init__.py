@@ -1,3 +1,3 @@
-from .HealerModel import GuardViolationModel, PlaybookModel
+from .HealerModel import FileChangeModel, GuardViolationModel, HealOutcomeModel
 
-__all__ = ["GuardViolationModel", "PlaybookModel"]
+__all__ = ["GuardViolationModel", "FileChangeModel", "HealOutcomeModel"]

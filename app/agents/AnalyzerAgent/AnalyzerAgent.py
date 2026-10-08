@@ -11,13 +11,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from openhands.sdk import LLM, Agent, Conversation, Tool
-from openhands.sdk.context.condenser import LLMSummarizingCondenser
-from openhands.sdk.conversation.base import BaseConversation
-from openhands.sdk.conversation.exceptions import ConversationRunError
-from openhands.sdk.conversation.impl.remote_conversation import RemoteConversation
-from openhands.sdk.conversation.response_utils import get_agent_final_response
-from openhands.sdk.event.error_classification import classify_error
+from openhands.sdk import Agent, Conversation, Tool
 from openhands.sdk.workspace import BaseWorkspace
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.glob import GlobTool
@@ -25,13 +19,9 @@ from openhands.tools.grep import GrepTool
 from pydantic import ValidationError as PydanticValidationError
 
 from app.agents.AnalyzerAgent.AgentEventMapper import (
-    AGENT_TIMED_OUT,
-    MAX_ITERATIONS_CODE,
     MAX_MESSAGE_CHARS,
     AgentEvent,
     clip,
-    describe_agent_failure,
-    map_openhands_event,
 )
 from app.agents.AnalyzerAgent.AnalyzerPrompts import (
     ANSWER_PLACEHOLDERS,
@@ -44,7 +34,16 @@ from app.core.exceptions import AnalysisError, ErrorMessages
 from app.models.analyzerModel import AnalyzerFindingsModel, Confidence, FactModel, FactSheetModel, FactSource
 from app.models.llmModel import LlmConfigModel
 from app.models.runModel import RunEventLevel, RunEventType
+from app.utils.AgentConversationUtils import (
+    AgentControl,
+    EventForwarder,
+    ask,
+    build_condenser,
+    close_conversation,
+    secret_values,
+)
 from app.utils.LlmInstance import build_llm
+from app.utils.StructuredOutput import complete_json
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +71,13 @@ JSON_TOO_DEEP = "the JSON is nested too deeply"
 NOT_A_JSON_OBJECT = "the answer is not a JSON object"
 EXAMPLE_VALUE_COPIED = 'the answer still contains the example value "{value}"'
 # Timeline notice before the repair round.
-REPAIR_NOTICE = "The answer could not be used ({reason}); asking the agent to correct it"
+REPAIR_NOTICE = "The answer could not be used ({reason}); asking the agent to correct it (attempt {attempt} of {attempts})"
+FORMATTER_NOTICE = "The agent could not produce valid JSON ({reason}); formatting its answer with strict JSON mode"
+FORMATTER_INSTRUCTIONS = (
+    "Convert the analysis below into one JSON object that matches the required schema. Keep the meaning and the "
+    "cited file paths exactly; do not invent values or evidence. Use null for unknown values, an empty evidence list "
+    "and confidence \"low\" for answers without evidence."
+)
 
 
 def parse_findings(text: str) -> AnalyzerFindingsModel:
@@ -99,152 +104,83 @@ def parse_findings(text: str) -> AnalyzerFindingsModel:
 
 
 class AnalyzerAgent:
-    def __init__(self, llm_config: LlmConfigModel, max_iterations: int = settings.ANALYZER_MAX_ITERATIONS) -> None:
+    def __init__(
+        self,
+        llm_config: LlmConfigModel,
+        max_iterations: int = settings.ANALYZER_MAX_ITERATIONS,
+        repair_attempts: int = settings.ANALYZER_REPAIR_ATTEMPTS,
+        formatter: Callable[[str], AnalyzerFindingsModel] | None = None,
+    ) -> None:
         self.llm_config = llm_config
         self.max_iterations = max_iterations
+        self.repair_attempts = max(repair_attempts, 0)
+        # Last resort for answers the agent could not fix; injectable for tests.
+        self.formatter = formatter or self._format_with_schema
 
     def analyze(
         self,
         workspace: BaseWorkspace,
         fact_sheet: FactSheetModel,
         on_event: Callable[[AgentEvent], None] | None = None,
+        control: AgentControl | None = None,
     ) -> AnalyzerFindingsModel:
-        """Blocking: the master runs it in a worker thread. One repair round when the answer is not usable."""
-        forwarder = _EventForwarder(on_event, _secret_values(self.llm_config))
+        """Blocking: the master runs it in a worker thread.
+
+        An answer is strictly validated. If it is not usable, the agent corrects it (up to `repair_attempts` rounds,
+        each told the exact error), then a schema-constrained formatter is the last resort.
+        """
+        forwarder = EventForwarder(on_event, secret_values(self.llm_config))
         conversation = Conversation(
             agent=self._build_agent(),
             workspace=workspace,
             callbacks=[forwarder],
             max_iteration_per_run=self.max_iterations,
             visualizer=None,
+            # No extra LLM call to name the conversation: the shared local model is slow.
+            autotitle=False,
         )
         deadline = time.monotonic() + settings.RUN_TIMEOUT_SECONDS
         try:
-            answer = _ask(conversation, build_analysis_prompt(fact_sheet), deadline)
-            try:
+            answer = ask(conversation, build_analysis_prompt(fact_sheet), deadline, _analysis_failed, control)
+            reason = _usable_or_reason(answer)
+            if reason is None:
                 return parse_findings(answer)
-            except ValueError as error:
-                reason = str(error)
 
-            logger.info("Analyzer answer was not usable (%s); asking the agent to correct it", reason)
-            forwarder.notify(AgentEvent(
-                RunEventType.AGENT_ERROR, RunEventLevel.INFO, clip(REPAIR_NOTICE.format(reason=reason), MAX_MESSAGE_CHARS)
-            ))
-            answer = _ask(conversation, build_repair_prompt(reason), deadline)
+            # Layer 2: the agent corrects its own answer, told the exact validation error each round.
+            for attempt in range(1, self.repair_attempts + 1):
+                logger.info("Analyzer answer not usable (%s); repair attempt %d", reason, attempt)
+                forwarder.notify(_notice(REPAIR_NOTICE.format(reason=reason, attempt=attempt, attempts=self.repair_attempts)))
+                answer = ask(conversation, build_repair_prompt(reason), deadline, _analysis_failed, control)
+                reason = _usable_or_reason(answer)
+                if reason is None:
+                    return parse_findings(answer)
+
+            # Layer 3: a schema-constrained LLM call turns the last answer into JSON of the right shape.
+            forwarder.notify(_notice(FORMATTER_NOTICE.format(reason=reason)))
             try:
-                return parse_findings(answer)
+                return self.formatter(answer)
             except ValueError as error:
                 raise AnalysisError(ErrorMessages.ANALYSIS_FAILED.format(reason=str(error))) from None
         finally:
-            _close(conversation)
+            close_conversation(conversation)
+
+    def _format_with_schema(self, answer: str) -> AnalyzerFindingsModel:
+        return complete_json(
+            self.llm_config,
+            FORMATTER_INSTRUCTIONS,
+            answer or "(the agent gave no answer)",
+            "analyzer_findings",
+            AnalyzerFindingsModel.model_json_schema(),
+            parse_findings,
+        )
 
     def _build_agent(self) -> Agent:
         llm = build_llm(self.llm_config)
         return Agent(
             llm=llm,
             tools=[Tool(name=name) for name in ANALYZER_TOOL_NAMES],
-            condenser=_build_condenser(llm, self.llm_config.num_ctx),
+            condenser=build_condenser(llm, self.llm_config.num_ctx),
         )
-
-
-class _EventForwarder:
-    """The conversation callback: maps SDK events and hands them to on_event.
-
-    It never raises. The SDK calls its callbacks one after another without a guard, and its own event
-    bookkeeping (which the final answer is read from) runs after ours.
-    """
-
-    def __init__(self, on_event: Callable[[AgentEvent], None] | None, secrets: tuple[str, ...]) -> None:
-        self.on_event = on_event
-        self.secrets = secrets
-        self._failed = False
-
-    def __call__(self, event: Any) -> None:
-        if self.on_event is not None:
-            self.notify(map_openhands_event(event))
-
-    def notify(self, event: AgentEvent | None) -> None:
-        if event is None or self.on_event is None:
-            return
-        try:
-            self.on_event(_mask_event(event, self.secrets))
-        except Exception:
-            if not self._failed:
-                logger.exception("Analyzer on_event callback failed; the analysis continues")
-            self._failed = True
-
-
-def _ask(conversation: BaseConversation, message: str, deadline: float) -> str:
-    """Send one message, let the agent work, return its final answer ("" when it gave none)."""
-    conversation.send_message(message)
-    try:
-        if isinstance(conversation, RemoteConversation):
-            # Without a timeout a remote run keeps polling for up to an hour, even after its sandbox is gone.
-            conversation.run(timeout=max(deadline - time.monotonic(), 1.0))
-        else:
-            conversation.run()
-    except ConversationRunError as error:
-        if not _stopped_at_a_limit(error):
-            logger.warning("Analyzer conversation failed", exc_info=True)
-            raise AnalysisError(ErrorMessages.ANALYSIS_FAILED.format(reason=_run_failure_reason(error))) from error
-        logger.info("Analyzer agent stopped at a step limit; reading what it answered")
-    return get_agent_final_response(conversation.state.events)
-
-
-def _stopped_at_a_limit(error: ConversationRunError) -> bool:
-    """Out of steps or stuck: the agent can still answer with what it found (a remote run raises for these)."""
-    if error.conversation_error is not None:
-        return error.conversation_error.code == MAX_ITERATIONS_CODE
-    return "stuck" in str(error.original_exception).lower()
-
-
-def _run_failure_reason(error: ConversationRunError) -> str:
-    event = error.conversation_error
-    if event is not None:
-        return describe_agent_failure(event.code, event.classification.kind if event.classification else None)
-    original = error.original_exception
-    if isinstance(original, TimeoutError):
-        return AGENT_TIMED_OUT
-    code = type(original).__name__
-    return describe_agent_failure(code, classify_error(code, str(original)).kind)
-
-
-def _close(conversation: BaseConversation) -> None:
-    try:
-        conversation.close()
-    except Exception:
-        logger.warning("Could not close the analyzer conversation", exc_info=True)
-
-
-def _build_condenser(llm: LLM, num_ctx: int | None) -> LLMSummarizingCondenser:
-    return LLMSummarizingCondenser(
-        llm=llm.model_copy(update={"usage_id": "condenser"}),
-        max_tokens=int(num_ctx * _CONTEXT_WINDOW_SHARE) if num_ctx else None,
-    )
-
-
-def _secret_values(config: LlmConfigModel) -> tuple[str, ...]:
-    key = config.api_key.get_secret_value() if config.api_key else ""
-    return (key,) if len(key) >= _MIN_SECRET_LENGTH else ()
-
-
-def _mask_event(event: AgentEvent, secrets: tuple[str, ...]) -> AgentEvent:
-    """Defense in depth: the API key never reaches the timeline, even if the agent read it somewhere."""
-    if not secrets:
-        return event
-    return AgentEvent(event.type, event.level, _mask(event.message, secrets), _mask(event.data, secrets))
-
-
-def _mask(value: Any, secrets: tuple[str, ...]) -> Any:
-    if isinstance(value, str):
-        for secret in secrets:
-            value = value.replace(secret, _SECRET_MASK)
-        return value
-    if isinstance(value, list):
-        return [_mask(item, secrets) for item in value]
-    if isinstance(value, dict):
-        return {key: _mask(item, secrets) for key, item in value.items()}
-    return value
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -357,3 +293,20 @@ def _strings(value: Any) -> set[str]:
     if isinstance(value, list):
         return set().union(*(_strings(item) for item in value))
     return set()
+
+
+def _usable_or_reason(answer: str) -> str | None:
+    """None when the answer validates, else the short reason it does not."""
+    try:
+        parse_findings(answer)
+    except ValueError as error:
+        return str(error)
+    return None
+
+
+def _notice(message: str) -> AgentEvent:
+    return AgentEvent(RunEventType.AGENT_ERROR, RunEventLevel.INFO, clip(message, MAX_MESSAGE_CHARS))
+
+
+def _analysis_failed(reason: str) -> AnalysisError:
+    return AnalysisError(ErrorMessages.ANALYSIS_FAILED.format(reason=reason))

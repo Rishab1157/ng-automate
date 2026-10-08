@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 from bson import ObjectId
 from pydantic import SecretStr
@@ -56,9 +58,24 @@ def _seed(mongo: MongoClient, org_id: str, *, enabled: bool = True, active: bool
 @pytest.mark.anyio
 @pytest.mark.parametrize("blank", [None, "", "  ", "undefined", "null", "None"])
 async def test_no_connection_uses_default(app_db: MongoClient, blank: str | None) -> None:
-    config = await ModelConnectionService().get_llm_config(blank, str(ObjectId()))
+    service = ModelConnectionService()
 
+    class NoDatabase:
+        def __getattr__(self, name: str) -> Any:
+            raise AssertionError("without a model connection id the database must not be read")
+
+    service.model_conn_repo = NoDatabase()  # type: ignore[assignment]
+    service.module_service = NoDatabase()  # type: ignore[assignment]
+
+    config = await service.get_llm_config(blank, str(ObjectId()))
+
+    # Everything comes from .env: the free default model.
     assert config.model == settings.LLM_MODEL
+    assert config.base_url == settings.LLM_BASE_URL
+    assert config.num_ctx == settings.LLM_NUM_CTX
+    assert (config.api_key.get_secret_value() if config.api_key else None) == (
+        settings.LLM_API_KEY.get_secret_value() if settings.LLM_API_KEY else None
+    )
 
 
 @pytest.mark.anyio
