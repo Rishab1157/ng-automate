@@ -285,6 +285,10 @@ def _step(raw: Any, case_id: str, number: int, warnings: list[str]) -> TestStepM
         raise ValidationError(STEP_ACTION_REQUIRED.format(case=case_id, step=number))
     target = _text(raw.get("target")) or None
     target_hint = _text(raw.get("target_hint") or raw.get("element")) or None
+    alternates = _alternate_locators(raw)
+    # A step may list its locators as `locators: [...]`: the first is the primary, the rest are fallbacks.
+    if target is None and action not in NAVIGATION_ACTIONS and alternates:
+        target, alternates = alternates[0], alternates[1:]
     needs_locator = action in TARGETED_ACTIONS and target is None and target_hint is None
     if needs_locator:
         warnings.append(NEEDS_LOCATOR.format(case=case_id, step=number, action=action))
@@ -294,11 +298,24 @@ def _step(raw: Any, case_id: str, number: int, warnings: list[str]) -> TestStepM
         action=action,
         target=target,
         target_hint=target_hint,
+        alternate_locators=alternates,
         value=_text(raw.get("value")) or None,
         expected=_text(raw.get("expected")) or None,
         text=_text(raw.get("text")) or None,
         needs_locator=needs_locator,
     )
+
+
+def _alternate_locators(raw: dict[str, Any]) -> list[str]:
+    """The other locators the step gives for the same element, in the source's order."""
+    values: list[Any] = []
+    for key in ("alternate_locators", "alternates", "locators"):
+        item = raw.get(key)
+        if isinstance(item, str):
+            values.append(item)
+        elif isinstance(item, list):
+            values.extend(item)
+    return [text for item in values if (text := _text(item))]
 
 
 def _text(value: Any) -> str:

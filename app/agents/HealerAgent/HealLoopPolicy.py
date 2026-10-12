@@ -7,6 +7,8 @@ The healer is agent-driven: it decides how to fix a failure. This code only deci
 - no progress: the same failure came back HEALER_SAME_FAILURE_LIMIT runs in a row, or the healer's edits brought
   the project back to files that were already tested and failed the same way -> stop;
 - otherwise the healer gets another turn, told what its earlier fixes did.
+A run that is worse than the run before the heal (got_worse) never gets healed: the master undoes the heal's changes
+and runs the tests again, so one bad heal cannot pile up on top of a good one.
 After a heal (decided by the master, before the tests run again): a proven blocker, the healing time budget used up,
 or the healer itself failing -> stop.
 """
@@ -39,14 +41,20 @@ def stop_reason(
 
 
 def same_failure_streak(attempts: list[TestAttemptModel]) -> int:
-    """How many runs in a row, up to the last one, failed the same way."""
-    last = failure_signature(attempts[-1].result)
+    """How many runs in a row, up to the last one, failed the same way. A run of changes that were undone afterwards
+    does not count either way: the files it tested are gone."""
+    counted = [attempt for index, attempt in enumerate(attempts) if index == 0 or not _was_undone(attempts[index - 1])]
+    last = failure_signature(counted[-1].result)
     streak = 0
-    for attempt in reversed(attempts):
+    for attempt in reversed(counted):
         if failure_signature(attempt.result) != last:
             break
         streak += 1
     return streak
+
+
+def _was_undone(attempt: TestAttemptModel) -> bool:
+    return attempt.heal is not None and attempt.heal.undone
 
 
 def _back_to_a_tested_state(attempts: list[TestAttemptModel]) -> bool:
@@ -72,9 +80,21 @@ def judge_heal(attempt: TestAttemptModel, next_attempt: TestAttemptModel | None)
         return HealMemoryResult.BLOCKED if attempt.heal is not None and attempt.heal.blocker else HealMemoryResult.UNFINISHED
     if next_attempt.result.classification.kind == FailureKind.PASSED:
         return HealMemoryResult.FIXED
+    if got_worse(attempt.result, next_attempt.result):
+        return HealMemoryResult.WORSE
     if failure_signature(next_attempt.result) == failure_signature(attempt.result):
         return HealMemoryResult.NOT_FIXED
     return HealMemoryResult.CHANGED
+
+
+def got_worse(before: TestRunResultModel, after: TestRunResultModel) -> bool:
+    """`after` is worse than `before`: the tests no longer run (where they did), or fewer of them pass."""
+    return _rank(after) < _rank(before)
+
+
+def _rank(result: TestRunResultModel) -> tuple[bool, bool, int]:
+    """How far the tests got, to compare runs: passing beats everything, then running at all, then passing tests."""
+    return result.classification.kind == FailureKind.PASSED, result.total > 0, result.passed
 
 
 def failure_signature(result: TestRunResultModel) -> tuple[str, ...]:
@@ -87,15 +107,13 @@ def heal_count(attempts: list[TestAttemptModel]) -> int:
 
 
 def heal_changes_helped(attempts: list[TestAttemptModel]) -> bool:
-    """Whether the healer's changes may go into the project: the tests ran again after the last heal and are no worse
-    than before the first one (they passed, or at least as many tests passed). Changes that were never checked by a
-    run, or after which the tests no longer ran or fewer passed, would only damage the user's project."""
+    """Whether the healer's changes may go into the project: the tests ran again after the last heal and are better
+    than before the first one: they pass, more of them pass, or they run at all where they did not (a build fixed).
+    Changes that were never checked by a run, or that changed nothing measurable (e.g. debug prints and pauses), or
+    after which fewer tests passed, would only clutter or damage the user's project."""
     if not attempts or attempts[-1].heal is not None:
         return False  # the loop stopped right after a heal: nothing checked its changes
-    first, last = attempts[0].result, attempts[-1].result
-    if last.classification.kind == FailureKind.PASSED:
-        return True
-    return last.total > 0 and last.passed >= first.passed
+    return _rank(attempts[-1].result) > _rank(attempts[0].result)
 
 
 CHANGES_NOT_KEPT = "the healer's changes were not kept: the tests did not get better with them"
@@ -140,7 +158,9 @@ def build_test_report(
     attempts: list[TestAttemptModel], reason: TestStopReason, detail: str | None = None
 ) -> TestReportModel:
     last = attempts[-1].result
-    changed = sorted({change.path for attempt in attempts if attempt.heal for change in attempt.heal.changes})
+    changed = sorted({
+        change.path for attempt in attempts if attempt.heal and not attempt.heal.undone for change in attempt.heal.changes
+    })
     return TestReportModel(
         changes_kept=heal_changes_helped(attempts) if changed else None,
         outcome=last.classification.kind,

@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     # Docker network for every sandbox, created with inter-container traffic turned off: a sandbox reaches the
     # internet and the host reaches its published ports, but no sandbox can reach another one.
     SANDBOX_NETWORK: str = "ngauto-sandboxes"
+    # Agents run inside a sandbox container, where 127.0.0.1 is the container itself: a model server on the
+    # machine that runs the API is only reachable through this host-gateway alias. A loopback LLM base URL is
+    # rewritten to it for sandboxed agents (the sandbox is started with the alias already added).
+    SANDBOX_HOST_ALIAS: str = "host.docker.internal"
     # How long a live-view ticket opens new connections (an open connection stays open).
     LIVE_VIEW_TICKET_SECONDS: int = 600
 
@@ -95,6 +99,9 @@ class Settings(BaseSettings):
     # Cases the generator gets at a time, in one conversation. A small local model given all cases at once tries to
     # write them in one huge reply and runs out of time; a few at a time it writes steadily.
     GENERATOR_BATCH_SIZE: int = 3
+    # After each batch the tests are built without running them (the stack's compile/collect step); while they do not
+    # build, the compiler's errors go back to the generator, this many times per batch.
+    GENERATOR_FIX_ROUNDS: int = 3
     # Times the generator is told to continue when it stops before writing any file.
     GENERATOR_NUDGES: int = 2
 

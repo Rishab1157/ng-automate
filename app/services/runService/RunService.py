@@ -34,7 +34,6 @@ from app.models.runModel import (
     RunMapper,
     RunMode,
     RunModel,
-    RunScope,
     RunStage,
     RunStatus,
     TestAttemptModel,
@@ -109,7 +108,6 @@ class RunService:
         test_selector: str | None = None,
         test_files: list[str] | None = None,
         test_data_id: str | None = None,
-        run_scope: RunScope = RunScope.GENERATED,
     ) -> RunModel:
         """Insert a queued run. The caller starts it (the run executor).
 
@@ -153,7 +151,6 @@ class RunService:
             test_selector=selector,
             test_files=files,
             test_data_id=test_data_id,
-            run_scope=run_scope,
             outputs=outputs,
         )
         await self.run_repo.insert_one(db_model.model_dump(by_alias=True))

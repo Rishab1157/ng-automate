@@ -19,7 +19,7 @@ from tests.test_run_service import seed_model_connection, seed_profile, seed_pro
 BASE = "/tx-agents/ng-automate/run"
 PROJECT_BASE = "/tx-agents/ng-automate/project"
 RUN_FIELDS = {
-    "id", "org_id", "project_id", "created_by", "model_connection_id", "mode", "test_selector", "test_files", "test_data_id", "run_scope", "status", "stage", "error", "profile_id",
+    "id", "org_id", "project_id", "created_by", "model_connection_id", "mode", "test_selector", "test_files", "test_data_id", "status", "stage", "error", "profile_id",
     "generation", "test_report",
     "created_at", "updated_at", "started_at", "finished_at",
 }
@@ -273,7 +273,8 @@ def test_tests_endpoint_lists_every_attempt_with_the_healer_diffs(
     heal = {"summary": "Set TestNG to 7.10.2", "violations": [], "reverted_files": [],
             "changes": [{"path": "pom.xml", "change": "modified", "diff": "-99.0.0\n+7.10.2"}]}
     report = {"outcome": "passed", "stop_reason": "passed", "detail": None, "runs": 2, "heals": 1, "total": 1,
-              "passed": 1, "failed": 0, "errors": 0, "skipped": 0, "changed_files": ["pom.xml"]}
+              "passed": 1, "failed": 0, "errors": 0, "skipped": 0, "changed_files": ["pom.xml"],
+              "changes_kept": True}
     _db(mongo).runs.update_one({"_id": ObjectId(run_id)}, {"$set": {
         "outputs.test_attempts": [_attempt_doc(1, "dependency_failure", heal), _attempt_doc(2, "passed")],
         "outputs.test_report": report,

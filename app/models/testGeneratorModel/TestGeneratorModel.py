@@ -23,10 +23,11 @@ class GenerationOutcomeModel(BaseModel):
     files: list[FileChangeModel] = Field(default_factory=list)  # files written or changed, kept after the guards
     generated_cases: list[str] = Field(default_factory=list)  # ids of the cases given to the agent
     skipped_cases: list[SkippedCaseModel] = Field(default_factory=list)
-    # How to run only the generated tests (a test selector), or None when they could not be told apart.
-    selector: str | None = None
     violations: list[GuardViolationModel] = Field(default_factory=list)
     reverted_files: list[str] = Field(default_factory=list)
+    # Whether the tests build after the generator's work (its stack's compile/collect step). None: not checked (the
+    # stack has no such step, or the project did not build before the generator started).
+    builds: bool | None = None
     # Locators the generator assumed and marked in the files it wrote (NGAUTO-UNVERIFIED).
     unverified_locators: list[UnverifiedLocatorModel] = Field(default_factory=list)
     # Why the generator stopped early (model unreachable, out of time, ...); its files were still checked.

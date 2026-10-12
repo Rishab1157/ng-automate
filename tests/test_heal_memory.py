@@ -203,6 +203,17 @@ def test_what_a_heal_achieved_comes_from_the_run_after_it(
     assert judge_heal(attempt, next_attempt) == expected
 
 
+LOCATOR = _result(FailureKind.LOCATOR_FAILURE, ["CartTest.removeFromCart: no such element: .shopping_cart_badge"], passed=11)
+
+
+def test_a_heal_after_which_fewer_tests_pass_made_it_worse() -> None:
+    # As in a real run: 11 tests passed and 1 did not find its element; the healer edited pom.xml and the build broke.
+    # Called "changed" (a different failure), it reached later heals as one that worked, and they copied it.
+    attempt = TestAttemptModel(number=3, result=LOCATOR, heal=FIX)
+
+    assert judge_heal(attempt, TestAttemptModel(number=4, result=BUILD)) == HealMemoryResult.WORSE
+
+
 def test_the_stored_payload_reads_back_as_the_same_memory() -> None:
     point_id, stored = _memory(ORG_A, "run-1")
 
@@ -441,6 +452,18 @@ def test_memories_reach_the_healer_as_context_not_orders() -> None:
 
 def test_no_memories_no_section() -> None:
     assert "Similar problems" not in build_heal_prompt(MAVEN_SELENIUM, COMMAND, FACT_SHEET)
+
+
+def test_a_heal_that_made_it_worse_reaches_the_healer_as_a_warning_without_its_diff() -> None:
+    point_id, stored = _memory(ORG_A, "run-3", failure=LOCATOR, after=BUILD, heal=FIX)
+    worse = HealMemoryMapper.to_model(point_id, stored.model_dump(mode="json"))
+
+    prompt = build_heal_prompt(LOCATOR, COMMAND, FACT_SHEET, memories=[worse])
+
+    assert (worse.result, worse.succeeded) == (HealMemoryResult.WORSE, False)
+    assert "- made it worse: fewer tests passed afterwards (or none ran), so it was undone" in prompt
+    assert "Changed: pom.xml" in prompt
+    assert "+<version>7.10.2</version>" not in prompt  # nothing to copy
 
 
 def _memory_parts(org_id: str, run_id: str, after: TestRunResultModel, heal: HealOutcomeModel) -> tuple[str, dict[str, Any]]:

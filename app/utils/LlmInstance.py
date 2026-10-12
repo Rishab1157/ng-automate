@@ -1,10 +1,14 @@
 """Build the LLM an OpenHands agent talks to."""
 
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit, urlunsplit
 
 from app.config import settings
 from app.models.llmModel import LlmConfigModel
 from app.models.modelConnectionModel import ModelConnectionSourceModel
+
+# Hosts that mean "the machine this process runs on". Inside a sandbox container they point at the container.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
 if TYPE_CHECKING:
     # The OpenHands SDK (and LiteLLM under it) takes seconds to import: only agents load it, not the API.
@@ -38,6 +42,25 @@ def get_default_llm_config() -> LlmConfigModel:
     )
 
 
+def sandbox_base_url(base_url: str | None) -> str | None:
+    """The base URL a sandboxed agent must use to reach the model.
+
+    Agents run in Docker containers, where localhost/127.0.0.1 is the container itself, so a model server on
+    the machine that runs the API is unreachable by that name. Sandboxes are started with a host-gateway alias
+    (SANDBOX_HOST_ALIAS), so a loopback URL is rewritten to it. A URL that already points elsewhere is left
+    untouched: a hosted model is reachable from anywhere.
+    """
+    if not base_url:
+        return base_url
+    parts = urlsplit(base_url)
+    if parts.hostname not in _LOOPBACK_HOSTS:
+        return base_url
+    host = settings.SANDBOX_HOST_ALIAS
+    if parts.port:
+        host = f"{host}:{parts.port}"
+    return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
+
+
 def build_llm(config: LlmConfigModel) -> "LLM":
     from openhands.sdk import LLM
 
@@ -51,7 +74,7 @@ def build_llm(config: LlmConfigModel) -> "LLM":
     return LLM(
         model=config.model,
         api_key=config.api_key,
-        base_url=config.base_url,
+        base_url=sandbox_base_url(config.base_url),
         api_mode=config.api_mode,
         native_tool_calling=config.native_tool_calling,
         **options,

@@ -8,8 +8,9 @@ class HealMemoryResult(str, Enum):
     """What came of a heal, as the next test run (or the end of the test phase) showed it."""
 
     FIXED = "fixed"  # the tests passed
-    CHANGED = "changed"  # a different failure came next: the problem the healer worked on is gone
+    CHANGED = "changed"  # a different failure came next, and no fewer tests passed: the problem worked on is gone
     NOT_FIXED = "not_fixed"  # the same failure came back
+    WORSE = "worse"  # fewer tests passed afterwards, or none ran: the heal made it worse (its changes were undone)
     BLOCKED = "blocked"  # the healer proved that the environment stops it
     UNFINISHED = "unfinished"  # the healer stopped (out of time, model failure) before the tests ran again
 

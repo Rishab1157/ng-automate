@@ -58,6 +58,10 @@ COPY ngauto-entrypoint.sh ngauto-find-elements /usr/local/bin/
 RUN sed -i 's/\r$//' /usr/local/bin/ngauto-entrypoint.sh /usr/local/bin/ngauto-find-elements \
     && chmod 755 /usr/local/bin/ngauto-entrypoint.sh /usr/local/bin/ngauto-find-elements
 
+# noVNC focuses its screen when it connects. Without preventScroll the browser scrolls the page that embeds the live
+# view down to it, so NG Automate's step pages jumped away from what the user was reading.
+RUN sed -i 's/UI\.rfb\.focus();/UI.rfb.focus({ preventScroll: true });/' /usr/share/novnc/app/ui.js
+
 # Commands the agent server runs see the display. Port 8001 belongs to websockify (the live view), so the agent
 # server's own VSCode, which also wants 8001, stays off.
 ENV DISPLAY=:99 \

@@ -1,11 +1,11 @@
-"""Where generated tests go, and how to run only them afterwards. Plain code, no LLM.
+"""Where generated tests go, which test cases can become tests, and the locators the generator had to assume.
+Plain code, no LLM.
 
-Every generated test lives in a folder (or package) named `ngauto`; generated Cucumber features carry the `@ngauto`
-tag. The master then runs just those tests with a test selector built here from the files the generator wrote.
+Generated tests live in a folder (or package) named `ngauto`, so they are easy to find next to the project's own.
+The user then picks which test files to run (a test run's test_files).
 """
 
-import re
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from app.models.analyzerModel import FactSheetModel
 from app.models.healerModel import FileChangeModel
@@ -13,39 +13,43 @@ from app.models.testDataModel import TestCaseSpecModel
 from app.models.testGeneratorModel import UnverifiedLocatorModel
 
 GENERATED_DIR = "ngauto"
-GENERATED_TAG = "@ngauto"
 NO_STEPS = "the case has no steps"
 # Put by the generator (and the healer) on every locator that is not in the test data or the project: a person
 # should check it.
 UNVERIFIED_MARKER = "NGAUTO-UNVERIFIED"
 
-_FEATURE_LINE = re.compile(r"^(\s*)Feature:", re.MULTILINE)
-_TEST_FILE = re.compile(
-    r"(Test|Tests)\.(java|kt)$|^test_.*\.py$|_test\.py$|\.(spec|test|cy)\.(ts|tsx|js|jsx|mjs|cjs)$|\.robot$"
-)
-
 
 def placement_rule(fact_sheet: FactSheetModel) -> str:
-    """The instruction that makes the generated tests selectable, for this project's stack."""
+    """Where the generated tests go, for this project's stack."""
     stack = _stack(fact_sheet)
     if stack == "cucumber":
         return (
-            f"Write the scenarios in a new .feature file in the project's features folder, with the tag {GENERATED_TAG} "
-            "on the line above 'Feature:'. Add any missing step definitions to the existing step-definition classes "
-            "(or a new class next to them)."
+            "Write the scenarios in a new .feature file in the project's features folder. Add any missing step "
+            "definitions to the existing step-definition classes (or a new class next to them)."
         )
     if stack in ("maven", "gradle"):
         return (
-            f"Put each new test class in a package named '{GENERATED_DIR}' under the project's existing test package "
-            "(e.g. src/test/java/com/acme/ngauto/LoginTest.java); class names end with 'Test'."
+            f"Put each new test class in a package named '{GENERATED_DIR}' under the project's existing test package: "
+            f"find a file that already holds the project's tests and put yours next to it in a '{GENERATED_DIR}' "
+            f"subfolder, with the same package name plus '.{GENERATED_DIR}' (so the class can still import the "
+            "project's base class and helpers). Class names end with 'Test'. A project with no tests yet: use its "
+            f"root test package instead (page objects in com.acme.pages mean the package com.acme.{GENERATED_DIR}, in "
+            f"src/test/java/com/acme/{GENERATED_DIR})."
         )
     if stack == "pytest":
-        return f"Put the new test files in a folder named '{GENERATED_DIR}' inside the tests folder, named test_<case>.py."
+        return (
+            f"Put the new test files in a folder named '{GENERATED_DIR}' inside the tests folder (a 'tests' folder at "
+            "the project root when there is none), named test_<case>.py."
+        )
     if stack == "robot":
-        return f"Put the new .robot files in a folder named '{GENERATED_DIR}' next to the existing suites."
+        return (
+            f"Put the new .robot files in a folder named '{GENERATED_DIR}' next to the existing suites (in a 'tests' "
+            "folder at the project root when there are none)."
+        )
     return (
-        f"Put the new spec files in a folder named '{GENERATED_DIR}' inside the folder that holds the existing specs, "
-        "using the same file naming and language (.ts or .js) as the project."
+        f"Put the new spec files in a folder named '{GENERATED_DIR}' inside the folder that holds the existing specs "
+        "(the test folder the runner's config names, when there are none), using the same file naming and language "
+        "(.ts or .js) as the project."
     )
 
 
@@ -85,48 +89,6 @@ def unverified_locators(project_root: Path, files: list[FileChangeModel], limit:
             if len(found) >= limit:
                 return found
     return found
-
-
-def tag_untagged_features(project_root: Path, files: list[FileChangeModel]) -> list[str]:
-    """Add the @ngauto tag to new .feature files that lack it; returns the files it changed."""
-    tagged: list[str] = []
-    for change in files:
-        if change.change != "added" or not change.path.endswith(".feature"):
-            continue
-        path = project_root / change.path
-        text = path.read_text(encoding="utf-8")
-        if GENERATED_TAG in text or not _FEATURE_LINE.search(text):
-            continue
-        path.write_text(_FEATURE_LINE.sub(rf"\g<1>{GENERATED_TAG}\n\g<1>Feature:", text, count=1), encoding="utf-8")
-        tagged.append(change.path)
-    return tagged
-
-
-def generated_selector(fact_sheet: FactSheetModel, files: list[FileChangeModel]) -> str | None:
-    """A test selector that runs only the generated tests, or None when they cannot be told apart."""
-    added = [PurePosixPath(change.path) for change in files if change.change == "added"]
-    stack = _stack(fact_sheet)
-    if stack == "cucumber":
-        return GENERATED_TAG if any(path.suffix == ".feature" for path in added) else None
-    tests = [path for path in added if _TEST_FILE.search(path.name)]
-    folders = {_generated_folder(path) for path in tests}
-    if not tests or None in folders:
-        return None
-    if stack == "maven":
-        return f"**/{GENERATED_DIR}/*"
-    if stack == "gradle":
-        return f"*.{GENERATED_DIR}.*"
-    if len(folders) != 1:
-        return None
-    folder = str(folders.pop())
-    return f"{folder}/**" if "Cypress" in _values(fact_sheet.test_frameworks.value) else folder
-
-
-def _generated_folder(path: PurePosixPath) -> PurePosixPath | None:
-    for index, part in enumerate(path.parts[:-1]):
-        if part == GENERATED_DIR:
-            return PurePosixPath(*path.parts[: index + 1])
-    return None
 
 
 def _stack(fact_sheet: FactSheetModel) -> str:

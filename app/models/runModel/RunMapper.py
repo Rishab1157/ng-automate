@@ -12,7 +12,6 @@ from .RunModel import (
     RunMode,
     RunModel,
     RunOutputsModel,
-    RunScope,
     RunStage,
     RunStatus,
 )
@@ -30,7 +29,6 @@ class RunMapper:
         test_selector: str | None = None,
         test_files: list[str] | None = None,
         test_data_id: str | None = None,
-        run_scope: RunScope = RunScope.GENERATED,
         outputs: dict[str, Any] | None = None,
     ) -> RunCreateDbModel:
         now = datetime.now(UTC)
@@ -43,7 +41,6 @@ class RunMapper:
             test_selector=test_selector,
             test_files=test_files,
             test_data_id=ObjectId(test_data_id) if test_data_id else None,
-            run_scope=RunScope(run_scope).value,
             outputs=outputs or {},
             status=RunStatus.QUEUED.value,
             stage=RunStage.QUEUED.value,
@@ -69,7 +66,6 @@ class RunMapper:
             test_selector=doc.get("test_selector"),
             test_files=doc.get("test_files"),
             test_data_id=str(doc["test_data_id"]) if doc.get("test_data_id") else None,
-            run_scope=RunScope(doc.get("run_scope") or RunScope.GENERATED.value),
             status=RunStatus(doc["status"]),
             stage=RunStage(doc["stage"]),
             outputs=RunOutputsModel.model_validate(outputs),

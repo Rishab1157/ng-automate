@@ -33,8 +33,11 @@ class TestStepModel(BaseModel):
 
     action: str  # e.g. "open", "click", "type", "select", "verify_text", "wait"
     target: str | None = None  # locator (XPath, CSS, id=...) or URL for "open", only as the source gives it
-    # The element in words when the source gives no locator, e.g. "Login button": found later, never guessed.
+    # The element in words when the source gives no locator, e.g. "Login button": found later (or assumed and marked).
     target_hint: str | None = None
+    # Other locators the source gives for the same element, in the source's order: tried when `target` does not
+    # match the page. Kept next to the first one so a failing run can fall back instead of giving up.
+    alternate_locators: list[str] = Field(default_factory=list)
     value: str | None = None  # text to type / option to select
     expected: str | None = None  # expected text/state for verify steps
     text: str | None = None  # the step as the source wrote it

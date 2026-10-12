@@ -54,6 +54,12 @@ class TestCommandModel(BaseModel):
 
     tool: str  # e.g. "maven", "gradle", "pytest", "playwright"
     command: str  # shell command, run from working_dir
+    # Run first in the fresh sandbox: installs the project's declared dependencies (e.g. pip install -r
+    # requirements.txt, npm ci). None when the build tool resolves them itself (Maven, Gradle) or nothing is declared.
+    setup: str | None = None
+    # A quick build of the tests without running them (compile, collect): how the generator checks that what it wrote
+    # builds. None when the stack has no such step.
+    check: str | None = None
     working_dir: str = "."  # repo-relative
     report_globs: list[str] = Field(default_factory=list)  # repo-relative glob patterns
 

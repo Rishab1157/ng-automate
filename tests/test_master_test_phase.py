@@ -23,7 +23,7 @@ from app.agents.MasterAgent.MasterGraph import (
     build_master_graph,
     route_next,
 )
-from app.agents.MasterAgent.MasterNodes import SELECTOR_NOT_FOUND_MESSAGE, MasterNodes
+from app.agents.MasterAgent.MasterNodes import MasterNodes
 from app.agents.MasterAgent.MasterState import MasterState, initial_state
 from app.agents.RunnerAgent.TestCommandResolver import resolve_test_command
 from app.core.exceptions import ErrorMessages, GenerationError, ValidationError
@@ -100,6 +100,8 @@ class FakeHealer:
     outcomes: list[HealOutcomeModel]
     calls: list[dict[str, Any]] = field(default_factory=list)
     llm_models: list[str] = field(default_factory=list)
+    # What each heal writes into the run's copy (path -> text), in order: the files its outcome's changes name.
+    edits: list[dict[str, str]] = field(default_factory=list)
 
     def factory(self, llm_config: Any) -> "FakeHealer":
         self.llm_models.append(llm_config.model)
@@ -111,6 +113,9 @@ class FakeHealer:
         self.calls.append({"workspace": workspace, "result": result, "previous": list(previous),
                            "time_limit": time_limit, "memories": list(memories)})
         on_event(AgentEvent(RunEventType.AGENT_ACTION, RunEventLevel.INFO, "str_replace pom.xml", {"tool": "file_editor"}))
+        for path, text in (self.edits.pop(0) if self.edits else {}).items():
+            (project_dir / path).parent.mkdir(parents=True, exist_ok=True)
+            (project_dir / path).write_text(text, encoding="utf-8")
         return self.outcomes.pop(0)
 
 
@@ -288,6 +293,47 @@ async def test_next_healer_hears_about_the_earlier_fix(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_a_heal_that_makes_the_tests_worse_is_undone_and_the_tests_run_again(tmp_path: Path) -> None:
+    # As in a real run: the first heal fixed the build (11 of 12 tests pass), the second one edited pom.xml again for a
+    # failure inside a test and the build broke. Its edits are undone; the next heal starts from the better files.
+    code_error = _result(FailureKind.TEST_CODE_FAILURE, ["CartTest.remove: NullPointerException"], passed=11, failed=1)
+    build = _result(FailureKind.BUILD_FAILURE, ["Some problems were encountered while processing the POMs"])
+    first = HealOutcomeModel(summary="Set TestNG to 7.11.0", changes=[FileChangeModel(path="pom.xml", change="modified")])
+    bad = HealOutcomeModel(summary="Added selenium-devtools", changes=[
+        FileChangeModel(path="pom.xml", change="modified"), FileChangeModel(path="src/test/java/Junk.java", change="added"),
+    ])
+    last = HealOutcomeModel(summary="Null check in CartTest", changes=[FileChangeModel(path="src/test/java/CartTest.java", change="modified")])
+    setup = _setup(tmp_path, [DEPENDENCY, code_error, build, code_error, PASSED], [first, bad, last])
+    setup.healer.edits = [
+        {"pom.xml": "<project>7.11.0</project>"},
+        {"pom.xml": "<project>7.11.0 devtools</project>", "src/test/java/Junk.java": "class Junk {}"},
+        {"src/test/java/CartTest.java": "class CartTest {}"},
+    ]
+    state = _test_state(tmp_path)
+    project = Path(state["project_dir"])
+    (project / "pom.xml").write_text("<project>99.0.0</project>", encoding="utf-8")
+
+    await setup.nodes.test_and_heal(state)
+
+    assert (project / "pom.xml").read_text(encoding="utf-8") == "<project>7.11.0</project>"
+    assert not (project / "src/test/java/Junk.java").exists()
+    runs = setup.runs
+    attempts = runs.outputs["test_attempts"]
+    assert [(a.number, a.heal.undone if a.heal else None) for a in attempts] == [
+        (1, False), (2, True), (3, None), (4, False), (5, None)
+    ]
+    assert len(setup.runner.calls) == 5
+    # The next heal works on the failure of the restored files, and hears that the bad heal was undone.
+    third = setup.healer.calls[2]
+    assert third["result"] == code_error and third["previous"][1].undone
+    assert any(event.message == "Undid the healer's changes to pom.xml, src/test/java/Junk.java: the tests got worse "
+               "with them. The tests run again without them" for event in runs.events)
+    report = runs.outputs["test_report"]
+    assert (report.stop_reason, report.changed_files) == (TestStopReason.PASSED, ["pom.xml", "src/test/java/CartTest.java"])
+    assert [(m.attempt, m.result) for _, m in setup.memory.remembered] == [(1, "changed"), (2, "worse"), (4, "fixed")]
+
+
+@pytest.mark.anyio
 async def test_failing_assertions_are_reported_not_healed(tmp_path: Path) -> None:
     setup = _setup(tmp_path, [_result(FailureKind.TEST_FAILURE, passed=3, failed=1)])
 
@@ -320,7 +366,10 @@ async def test_the_healing_budget_is_shared_by_all_heals_of_the_run(tmp_path: Pa
     assert [call["time_limit"] for call in setup.healer.calls] == [3600, 1600]
     report = setup.runs.outputs["test_report"]
     assert (report.stop_reason, report.runs, report.heals) == (TestStopReason.TIMED_OUT, 3, 2)
-    assert setup.runs.events[-1].message == "Stopped: the healer used all of its 60 minutes of healing time"
+    assert setup.runs.events[-1].message == (
+        "Stopped: the healer used all of its 60 minutes of healing time · the healer's changes were not kept: the tests did not get better with them"
+    )
+    assert report.changes_kept is False  # the tests never ran better after the heals
 
 
 @pytest.mark.anyio
@@ -422,7 +471,6 @@ GENERATED = GenerationOutcomeModel(
     generated_cases=["LOGIN-1"],
     skipped_cases=[SkippedCaseModel(case_id="LOGOUT-1", reason="the case has no steps")],
     unverified_locators=[UnverifiedLocatorModel(path="src/test/java/LoginSteps.java", line=7, code='By.id("go")')],
-    selector="@ngauto",
 )
 TEST_DATA = TestDataSetModel(
     source_format=TestDataFormat.JSON,
@@ -513,7 +561,6 @@ async def test_generate_tests_saves_the_outcome_and_reports_it(tmp_path: Path) -
     completed = runs.completed_event(RunStage.GENERATING_TESTS)
     assert completed.message == "Wrote tests for 1 case in 1 file · 1 assumed locator to check · 1 case left out"
     assert completed.data["unverified_locators"] == [{"path": "src/test/java/LoginSteps.java", "line": 7, "code": 'By.id("go")'}]
-    assert completed.data["selector"] == "@ngauto"
     messages = [event.message for event in runs.events]
     assert messages.index("create login.feature") < messages.index(completed.message)
 
@@ -528,25 +575,6 @@ async def test_generation_without_files_fails_the_run(tmp_path: Path) -> None:
 
     assert caught.value.message == "The test generator stopped: the generator wrote no test files"
     assert setup.runs.outputs["generation"] == empty
-
-
-@pytest.mark.anyio
-async def test_unknown_selector_is_announced(tmp_path: Path) -> None:
-    setup, _, _ = _generate_setup(tmp_path, GENERATED.model_copy(update={"selector": None}))
-
-    await setup.nodes.generate_tests(_generate_state(tmp_path))
-
-    assert setup.runs.events[-1].message == SELECTOR_NOT_FOUND_MESSAGE
-
-
-@pytest.mark.anyio
-async def test_generated_tests_are_the_ones_that_run(tmp_path: Path) -> None:
-    setup = _setup(tmp_path, [PASSED])
-    state = _generate_state(tmp_path, generation=GENERATED.model_dump(mode="json"), test_selector="ignored")
-
-    await setup.nodes.test_and_heal(state)
-
-    assert setup.runner.calls[0][2] == resolve_test_command(FACT_SHEET, "@ngauto")
 
 
 # --------------------------------------------------------------------------- the healer's memory

@@ -53,8 +53,8 @@ def test_upload_stores_the_parsed_cases_and_warns_about_missing_locators(
     assert body["warnings"] == ["case LOGIN-2 step 1: click needs a locator"]
     assert body["status"] == "ready" and body["error"] is None
     assert body["cases"][0]["steps"][1] == {
-        "action": "type", "target": "id=username", "target_hint": None, "value": "admin", "expected": None,
-        "text": None, "needs_locator": False,
+        "action": "type", "target": "id=username", "target_hint": None, "alternate_locators": [],
+        "value": "admin", "expected": None, "text": None, "needs_locator": False,
     }
     doc = mongo[settings.MONGO_DATABASE].test_data.find_one({"_id": ObjectId(body["id"])})
     assert doc["org_id"] == ObjectId(org_id) and doc["case_count"] == 2

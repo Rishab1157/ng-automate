@@ -100,6 +100,37 @@ def test_huge_hostile_output_stays_fast() -> None:
 
 
 
+def test_network_failure_in_the_output_is_an_environment_problem_for_the_healer() -> None:
+    output = (
+        "io.github.bonigarcia.wdm.config.WebDriverManagerException: java.net.UnknownHostException: "
+        "googlechromelabs.github.io\n[INFO] BUILD FAILURE"
+    )
+
+    result = classify_failure(1, output, [])
+
+    assert (result.kind, result.healable) == (FailureKind.ENVIRONMENT_FAILURE, True)
+    assert result.evidence
+
+
+def test_network_failure_only_in_a_setup_case_goes_to_the_healer() -> None:
+    # A real run: every test failed in @BeforeMethod with an UnknownHostException; the build output stayed clean.
+    cases = [
+        _thrown("setUp", "java.net.UnknownHostException: googlechromelabs.github.io",
+                "io.github.bonigarcia.wdm.config.WebDriverManagerException: java.net.UnknownHostException: "
+                "googlechromelabs.github.io\n\tat framework.BaseTest.setUp(BaseTest.java:25)"),
+        _case(TestCaseStatus.SKIPPED, "java.net.UnknownHostException: googlechromelabs.github.io"),
+    ]
+
+    result = classify_failure(1, "Tests run: 3, Failures: 1, Skipped: 2", cases)
+
+    assert (result.kind, result.healable) == (FailureKind.ENVIRONMENT_FAILURE, True)
+    assert result.evidence == [
+        # Where it happened in the project: the setup method that downloads the driver.
+        "setUp: java.net.UnknownHostException: googlechromelabs.github.io (at framework.BaseTest.setUp(BaseTest.java:25))",
+    ]
+
+
+
 def test_undefined_cucumber_steps_are_a_build_problem_for_the_healer() -> None:
     output = (
         "[ERROR]   TestRunner>AbstractTestNGCucumberTests.runScenario:35 » UndefinedStep The step "
@@ -160,3 +191,97 @@ def test_failed_checks_stay_with_the_user_even_with_a_code_error_among_them() ->
 
     assert result.kind == FailureKind.TEST_FAILURE
     assert not result.healable
+
+
+def test_one_network_error_does_not_hide_failed_checks() -> None:
+    cases = [
+        _case(TestCaseStatus.FAILED, "java.lang.AssertionError: expected [Products] but found [Swag Labs]"),
+        _case(TestCaseStatus.FAILED, "java.lang.AssertionError: expected [1] but found [0]"),
+        _thrown("t3", "Connection refused", "java.net.ConnectException: Connection refused"),
+    ]
+
+    result = classify_failure(1, "Tests run: 3, Failures: 3", cases)
+
+    assert result.kind == FailureKind.TEST_FAILURE
+    assert not result.healable
+
+
+def test_a_locator_failure_says_which_test_and_where_without_the_drivers_boilerplate() -> None:
+    # As in a real run: Selenium's message carries build/system/driver info and a capabilities dump.
+    case = TestCaseResultModel(
+        name="removeProductFromCart", suite="com.demo.tests.ngauto.CartAndCheckoutTest", status=TestCaseStatus.FAILED,
+        message="Expected condition failed: waiting for visibility of element located by By.cssSelector: "
+                "[data-test='shopping-cart-badge'] (tried for 10 second(s) with 500 milliseconds interval)\n"
+                "Build info: version: '4.27.0', revision: 'd6e718d134'\nSystem info: os.name: 'Linux'",
+        details="org.openqa.selenium.TimeoutException: \nExpected condition failed: waiting for visibility\n"
+                "Capabilities {acceptInsecureCerts: false, browserName: chrome}\n"
+                "\tat org.openqa.selenium.support.ui.WebDriverWait.timeoutException(WebDriverWait.java:84)\n"
+                "\tat org.openqa.selenium.support.ui.FluentWait.until(FluentWait.java:228)\n"
+                "\tat com.demo.pages.BasePage.find(BasePage.java:24)\n"
+                "\tat com.demo.pages.InventoryPage.cartCount(InventoryPage.java:55)\n"
+                "\tat com.demo.tests.ngauto.CartAndCheckoutTest.removeProductFromCart(CartAndCheckoutTest.java:20)\n"
+                "\tat java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)\n",
+    )
+
+    result = classify_failure(1, "Tests run: 12, Failures: 1", [case, *[PASS] * 11])
+
+    assert result.kind == FailureKind.LOCATOR_FAILURE
+    assert result.evidence == [
+        "com.demo.tests.ngauto.CartAndCheckoutTest.removeProductFromCart: Expected condition failed: waiting for "
+        "visibility of element located by By.cssSelector: [data-test='shopping-cart-badge'] (tried for 10 second(s) "
+        "with 500 milliseconds interval) (at com.demo.pages.BasePage.find(BasePage.java:24) < at "
+        "com.demo.pages.InventoryPage.cartCount(InventoryPage.java:55) < at "
+        "com.demo.tests.ngauto.CartAndCheckoutTest.removeProductFromCart(CartAndCheckoutTest.java:20))",
+    ]
+
+
+def test_python_frames_point_at_the_projects_files_not_site_packages() -> None:
+    case = TestCaseResultModel(
+        name="test_cart", suite="tests.ngauto.test_cart", status=TestCaseStatus.FAILED,
+        message="AttributeError: 'InventoryPage' object has no attribute 'open_cart'",
+        details="Traceback (most recent call last):\n"
+                '  File "/workspace/project/tests/ngauto/test_cart.py", line 9, in test_cart\n'
+                '  File "/home/openhands/.local/lib/python3.13/site-packages/_pytest/python.py", line 159, in call\n',
+    )
+
+    result = classify_failure(1, "1 failed", [case])
+
+    assert result.kind == FailureKind.TEST_CODE_FAILURE
+    assert result.evidence == [
+        "tests.ngauto.test_cart.test_cart: AttributeError: 'InventoryPage' object has no attribute 'open_cart' "
+        '(File "/workspace/project/tests/ngauto/test_cart.py", line 9, in test_cart)',
+    ]
+
+
+def test_the_tests_own_frame_is_kept_behind_a_deep_helper_chain() -> None:
+    # As in a real run: the test -> page object -> base page helpers -> wait (4 project frames).
+    case = TestCaseResultModel(
+        name="removeProductFromCart", suite="com.demo.tests.ngauto.CartAndCheckoutTest", status=TestCaseStatus.FAILED,
+        message="Expected condition failed: waiting for visibility of element located by By.cssSelector: [data-test='badge']",
+        details="org.openqa.selenium.TimeoutException: \n"
+                "\tat org.openqa.selenium.support.ui.FluentWait.until(FluentWait.java:228)\n"
+                "\tat com.demo.pages.BasePage.find(BasePage.java:23)\n"
+                "\tat com.demo.pages.BasePage.textOf(BasePage.java:45)\n"
+                "\tat com.demo.pages.InventoryPage.cartCount(InventoryPage.java:49)\n"
+                "\tat com.demo.tests.ngauto.CartAndCheckoutTest.removeProductFromCart(CartAndCheckoutTest.java:20)\n",
+    )
+
+    [line] = classify_failure(1, "Tests run: 2, Failures: 1", [case, PASS]).evidence
+
+    assert line.endswith(
+        "(at com.demo.pages.BasePage.find(BasePage.java:23) < at com.demo.pages.BasePage.textOf(BasePage.java:45) < "
+        "at com.demo.tests.ngauto.CartAndCheckoutTest.removeProductFromCart(CartAndCheckoutTest.java:20))"
+    )
+
+
+@pytest.mark.parametrize("output", [
+    "[ERROR] [ERROR] Some problems were encountered while processing the POMs:\n"
+    "[ERROR] Malformed POM /workspace/project/pom.xml: Unrecognised tag: 'dependency' (position: START_TAG seen ...",
+    "[ERROR] Non-parseable POM /workspace/project/pom.xml: end tag name </dependencies> must match start tag",
+    "* What went wrong:\nCould not compile build file '/workspace/project/build.gradle'.",
+    "npm ERR! code EJSONPARSE\nnpm ERR! JSON.parse Failed to parse json",
+])
+def test_a_build_file_that_no_longer_parses_is_a_build_failure(output: str) -> None:
+    result = classify_failure(1, output, [])
+
+    assert (result.kind, result.healable) == (FailureKind.BUILD_FAILURE, True)

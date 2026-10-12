@@ -1,10 +1,11 @@
 """Turn a free-form test-data source (plain text, or JSON in any shape) into test cases with an LLM.
 
 The source is split into numbered blocks (paragraphs of text, or the records of a JSON list) and read a few blocks
-at a time with a strict JSON schema. Every case must name the blocks it came from, and every URL, value, expected
-text and locator it carries must appear in those blocks: anything else is dropped and reported, never invented.
-A step that names its element only in words keeps that as `target_hint`; the test generator finds the real locator
-later (the project's page objects, or the live page), or leaves the case out.
+at a time with a strict JSON schema. Every case must name the blocks it came from. Every URL, value, expected text
+and locator a case carries must appear somewhere in the source: anything else is dropped and reported, never
+invented. (It need not be in the blocks the case cited: sources often keep the scenarios and their selectors in
+different sections.) A step that names its element only in words keeps that as `target_hint`; the test generator
+finds the real locator later (the project's page objects, or the live page), or assumes one and marks it for review.
 
 Blocking (LLM calls): call from a worker thread.
 """
@@ -43,13 +44,28 @@ GROUNDED_FIELDS = ("url", "value", "expected", "locator")
 INSTRUCTIONS = (
     "You turn test documentation into automated-test cases. The source is split into blocks marked [B1], [B2], ... "
     "Return one case per test case, scenario or acceptance criterion; list the block ids each case comes from. "
+    "Every case MUST end with a verify step for the source's expected result - a verify step repeats the source's own "
+    "words, so it is never an invention. Use verify_visible for a page, banner or element that must appear (name it "
+    "in 'target_hint', copy the expected words into 'expected'), verify_text for text that must be shown (exact text "
+    "in 'expected'), verify_url for an address. "
+    "Example case for a source that says 'Username: standard_user', 'Password: secret_sauce', 'Click Login', "
+    "'Expected Result: User logs in successfully and the inventory page is displayed.': "
+    '{"source_blocks": ["B1"], "id": null, "title": "Valid login", "preconditions": [], "tags": [], "steps": ['
+    '{"text": "Username: standard_user", "action": "type", "target_hint": "Username", "locator": "id=user-name", '
+    '"alternate_locators": [], "url": null, "value": "standard_user", "expected": null}, '
+    '{"text": "Password: secret_sauce", "action": "type", "target_hint": "Password", "locator": "id=password", '
+    '"alternate_locators": [], "url": null, "value": "secret_sauce", "expected": null}, '
+    '{"text": "Click the Login button", "action": "click", "target_hint": "Login button", "locator": "id=login-button", '
+    '"alternate_locators": [], "url": null, "value": null, "expected": null}, '
+    '{"text": "User logs in successfully and the inventory page is displayed.", "action": "verify_visible", '
+    '"target_hint": "inventory page", "locator": null, "alternate_locators": [], "url": null, "value": null, '
+    '"expected": "User logs in successfully and the inventory page is displayed."}]}. '
     "Keep the source's wording in each step's 'text'. Copy ids, URLs, values and expected texts exactly as written; "
     "use null when the source does not give one. 'target_hint' names the element in words (e.g. 'Login button'). "
     "'locator' must be null unless the source contains a real locator (id=..., css=..., an XPath, or #id). "
-    "Every expected result (Expected:, Then ..., ... should ..., ... is displayed) MUST become its own verify step "
-    "at the end: verify_text with 'expected' set to the exact expected text, verify_visible for an element or page "
-    "that must appear, verify_url for an address. Never drop an expected result. "
-    "Never invent URLs, locators, values or steps. List blocks that hold no test case in not_test_cases."
+    "If the source gives several locators for the same element (an id and a CSS selector and an XPath), put the first "
+    "one in 'locator' and the others in 'alternate_locators', copied exactly and in the source's order. "
+    "Never invent URLs, locators, values or test data. List blocks that hold no test case in not_test_cases."
 )
 
 
@@ -79,6 +95,10 @@ class TestCaseExtractor:
     def extract(self, text: str, source_format: TestDataFormat) -> TestDataSetModel:
         """Raises ValueError when no test case could be read at all."""
         blocks = split_blocks(text, source_format)
+        # Grounding looks at the whole source, not only the blocks a case cited: real sources keep the scenarios and
+        # their selectors/urls in different sections, and a case that names its steps must still keep a locator that
+        # is written elsewhere in the file. The value must be somewhere in the source - never invented.
+        source_blocks = {block.id: block for block in blocks}
         raw_cases: list[dict[str, Any]] = []
         warnings: list[str] = []
         failures: list[str] = []
@@ -97,8 +117,7 @@ class TestCaseExtractor:
                 logger.warning("Could not read part %d of a test-data source: %s", part, error)
                 failures.append(PART_FAILED.format(part=part, reason=str(error)[:200]))
                 continue
-            texts = {block.id: block for block in chunk}
-            raw_cases.extend(_grounded_case(case, texts, warnings) for case in reply["cases"])
+            raw_cases.extend(_grounded_case(case, source_blocks, warnings) for case in reply["cases"])
 
         cases = _unique(_dedupe([case for case in raw_cases if case["steps"]]))
         if not cases:
@@ -195,12 +214,13 @@ def _schema(block_ids: list[str]) -> dict[str, Any]:
     step = {
         "type": "object",
         "additionalProperties": False,
-        "required": ["text", "action", "target_hint", "locator", "url", "value", "expected"],
+        "required": ["text", "action", "target_hint", "locator", "alternate_locators", "url", "value", "expected"],
         "properties": {
             "text": {"type": "string"},
             "action": {"type": "string", "enum": ACTIONS},
             "target_hint": nullable,
             "locator": nullable,
+            "alternate_locators": {"type": "array", "items": {"type": "string"}},
             "url": nullable,
             "value": nullable,
             "expected": nullable,
@@ -242,7 +262,10 @@ def _parse_reply(reply: str) -> dict[str, Any]:
 
 def _grounded_case(case: dict[str, Any], blocks: dict[str, SourceBlock], warnings: list[str]) -> dict[str, Any]:
     cited = [blocks[block_id] for block_id in case.get("source_blocks") or [] if block_id in blocks]
-    haystack = _normalized(" ".join(block.text for block in cited))
+    haystack = _normalized(" ".join(block.text for block in blocks.values()))
+    # Provenance checks (does this case cover the expected result it cites?) use only the blocks the case cites; the
+    # grounding haystack above is the whole source, so a case is still valid when its locators live in another section.
+    cited_haystack = _normalized(" ".join(block.text for block in cited))
     label = case.get("id") or case.get("title") or "?"
     steps: list[dict[str, Any]] = []
     for number, step in enumerate(case.get("steps") or [], start=1):
@@ -255,15 +278,24 @@ def _grounded_case(case: dict[str, Any], blocks: dict[str, SourceBlock], warning
                 warnings.append(UNGROUNDED.format(case=label, step=number, field=field, value=str(value)[:80]))
                 kept[field] = None
         action = kept.get("action") or "other"
+        alternates: list[str] = []
+        for item in kept.get("alternate_locators") or []:
+            if not isinstance(item, str) or not item.strip():
+                continue
+            if _appears_in(item, haystack):
+                alternates.append(item)
+            else:
+                warnings.append(UNGROUNDED.format(case=label, step=number, field="alternate_locator", value=item[:80]))
         steps.append({
             "action": action,
             "target": kept.get("url") if action in NAVIGATION_ACTIONS else kept.get("locator"),
             "target_hint": kept.get("target_hint"),
+            "alternate_locators": alternates,
             "value": kept.get("value"),
             "expected": kept.get("expected"),
             "text": kept.get("text"),
         })
-    if _EXPECTATION.search(haystack) and not any(str(step["action"]).startswith("verify") for step in steps):
+    if _EXPECTATION.search(cited_haystack) and not any(str(step["action"]).startswith("verify") for step in steps):
         warnings.append(NO_CHECK.format(case=label))
     source_id = case.get("id")
     return {
@@ -306,7 +338,8 @@ def _unique(cases: list[dict[str, Any]]) -> list[TestCaseSpecModel]:
 
 
 def _normalized(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip().lower()
+    # Whitespace around "=" is presentation ("name = username" vs "name=username"): hide it so grounding matches.
+    return re.sub(r"\s*=\s*", "=", re.sub(r"\s+", " ", text)).strip().lower()
 
 
 def _appears_in(value: Any, haystack: str) -> bool:

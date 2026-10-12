@@ -84,6 +84,28 @@ def test_bad_input_is_explained(content: bytes, filename: str, message: str) -> 
         parse_test_data(content, filename)
 
 
+def test_a_step_keeps_every_locator_given_for_its_element() -> None:
+    cases = [
+        {
+            "id": "LOGIN-1",
+            "title": "Login",
+            "steps": [
+                {"action": "click", "locators": ["id=submit", "css=button[type=submit]", "xpath=//button"]},
+                {"action": "type", "target": "id=user", "alternate_locators": ["name=username"], "value": "admin"},
+            ],
+        }
+    ]
+
+    result = parse_test_data(json.dumps(cases).encode(), "cases.json")
+
+    steps = result.cases[0].steps
+    assert steps[0].target == "id=submit"
+    assert steps[0].alternate_locators == ["css=button[type=submit]", "xpath=//button"]
+    assert steps[0].needs_locator is False
+    assert steps[1].target == "id=user"
+    assert steps[1].alternate_locators == ["name=username"]
+
+
 def test_limits() -> None:
     with pytest.raises(ValidationError, match="larger than"):
         parse_test_data(b"x" * (MAX_TEST_DATA_BYTES + 1), "x.json")

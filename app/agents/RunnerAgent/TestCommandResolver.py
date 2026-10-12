@@ -21,6 +21,23 @@ _TEST_FILE_PATH = re.compile(r"^(?![-/])[A-Za-z0-9_.@/\- ]{1,300}$")
 _JVM_TEST_NAME = re.compile(r"(^Test\w*|\w*(Test|Tests|TestCase))\.(java|kt)$")
 _OTHER_TEST_NAME = re.compile(r"\.feature$|^test_.*\.py$|_test\.py$|\.(spec|test|cy)\.(ts|tsx|js|jsx|mjs|cjs)$|\.robot$")
 _JVM_TEST_DIRS = {"test", "tests", "it", "integrationTest"}
+# Setup: tools whose dependencies the project declares but the test command does not install.
+_PYTHON_TOOLS = frozenset({"pytest", "robot"})
+_NODE_TOOLS = frozenset({"playwright", "cypress", "webdriverio", "jest", "mocha", "npm", "yarn", "pnpm"})
+_REQUIREMENTS_FILE = re.compile(r"requirements[\w.-]*\.txt", re.IGNORECASE)
+# Check: build the tests without running them, per tool (Gradle's depends on its wrapper, see _check_command).
+_CHECK_COMMANDS = {
+    "maven": "mvn -B -ntp -q -DskipTests test-compile",
+    "pytest": "python -m pytest --collect-only -q",
+    "robot": "python -m robot --dryrun --output NONE --report NONE --log NONE .",
+    "playwright": "npx playwright test --list",
+}
+# Lock file at the project root -> the install that follows it exactly (first match wins).
+_NODE_INSTALL = (
+    ("pnpm-lock.yaml", "npx --yes pnpm install --frozen-lockfile"),
+    ("yarn.lock", "npx --yes yarn install --frozen-lockfile"),
+    ("package-lock.json", "npm ci"),
+)
 # What makes a JVM class runnable as tests: JUnit 4/5 and TestNG test methods, Cucumber and JUnit runner classes.
 _JVM_TEST_MARKERS = re.compile(
     r"@(Test|ParameterizedTest|RepeatedTest|TestFactory|TestTemplate|CucumberOptions|Suite|RunWith|Cucumber)\b"
@@ -58,7 +75,19 @@ class UnsupportedStackError(ValidationError):
 def resolve_test_command(
     fact_sheet: FactSheetModel, test_selector: str | None = None, test_files: list[str] | None = None
 ) -> TestCommandModel:
-    """The command that runs the project's tests: all of them, the selector's, or just the given test files."""
+    """The command that runs the project's tests (all of them, the selector's, or just the given test files), with the
+    setup that installs the project's declared dependencies first where its build tool does not (Python, Node)."""
+    command = _test_command(fact_sheet, test_selector, test_files)
+    markers = {marker.rsplit("/", 1)[-1] for marker in fact_sheet.marker_files}
+    return command.model_copy(update={
+        "setup": _setup_command(fact_sheet, command.tool),
+        "check": _check_command(command.tool, "gradlew" in markers),
+    })
+
+
+def _test_command(
+    fact_sheet: FactSheetModel, test_selector: str | None, test_files: list[str] | None
+) -> TestCommandModel:
     selector = check_test_selector(test_selector)
     files = check_test_files(test_files)
     if selector and files:
@@ -112,6 +141,31 @@ def resolve_test_command(
             raise ValidationError(NOT_A_TEST_FILE.format(path=files[0]))
         return TestCommandModel(tool=build_tool.lower(), command=f"{build_tool.lower()} test")
     raise UnsupportedStackError(UNSUPPORTED_STACK)
+
+
+def _setup_command(fact_sheet: FactSheetModel, tool: str) -> str | None:
+    """Installs what the project declares at its root, in the fresh sandbox, before its tests run. Plain commands, no
+    guessing: Maven and Gradle resolve their own dependencies, a project with nothing declared gets nothing."""
+    root = {path for path in fact_sheet.marker_files if "/" not in path}
+    if tool in _PYTHON_TOOLS:
+        requirements = sorted(name for name in root if _REQUIREMENTS_FILE.fullmatch(name))
+        if requirements:
+            return "python -m pip install -q " + " ".join(f"-r {_quoted(name)}" for name in requirements)
+        if "pyproject.toml" in root or "setup.py" in root:
+            return "python -m pip install -q -e ."
+        return None
+    if tool in _NODE_TOOLS and "package.json" in root:
+        install = next((command for lock, command in _NODE_INSTALL if lock in root), "npm install")
+        # Playwright drives its own browser build, downloaded once the package is in place.
+        return f"{install} && npx playwright install chromium" if tool == "playwright" else install
+    return None
+
+
+def _check_command(tool: str, has_gradle_wrapper: bool) -> str | None:
+    """Builds the tests without running them: compile errors, syntax and import errors show in seconds."""
+    if tool == "gradle":
+        return f"{'./gradlew' if has_gradle_wrapper else 'gradle'} testClasses --no-daemon -q"
+    return _CHECK_COMMANDS.get(tool)
 
 
 def _maven(selector: str | None, cucumber: bool, files: list[str] | None = None) -> TestCommandModel:

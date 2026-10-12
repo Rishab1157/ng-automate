@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app.models.runModel import RunMode, RunModel, RunScope, RunStage, RunStatus, TestReportModel
+from app.models.runModel import RunMode, RunModel, RunStage, RunStatus, TestReportModel
 from app.models.testGeneratorModel import GenerationOutcomeModel
 
 
@@ -23,7 +23,6 @@ class RunResponseDTO(BaseModel):
     test_selector: str | None = None
     test_files: list[str] | None = None
     test_data_id: str | None = None
-    run_scope: RunScope = RunScope.GENERATED
     status: RunStatus
     stage: RunStage
     error: RunErrorDTO | None = None
@@ -49,7 +48,6 @@ class RunResponseDTO(BaseModel):
             test_selector=run.test_selector,
             test_files=run.test_files,
             test_data_id=run.test_data_id,
-            run_scope=run.run_scope,
             status=run.status,
             stage=run.stage,
             error=RunErrorDTO(code=run.error.code, message=run.error.message) if run.error else None,

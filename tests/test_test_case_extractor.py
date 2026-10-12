@@ -32,7 +32,8 @@ Release notes: version 2.3 fixed the footer links.
 
 
 def _step(text: str, action: str, **fields: Any) -> dict[str, Any]:
-    step = {"text": text, "action": action, "target_hint": None, "locator": None, "url": None, "value": None, "expected": None}
+    step = {"text": text, "action": action, "target_hint": None, "locator": None, "alternate_locators": [],
+            "url": None, "value": None, "expected": None}
     step.update(fields)
     return step
 
@@ -132,6 +133,89 @@ def test_a_part_that_fails_is_reported_and_the_rest_is_kept() -> None:
 
     assert [case.id for case in data_set.cases] == ["TC-101"]
     assert data_set.warnings[0].startswith("part 2 of the source could not be read")
+
+
+def test_several_locators_for_one_element_are_kept_in_order_and_grounded() -> None:
+    source = (
+        "# Login - locators\n\n"
+        "TC-201: Login button\n"
+        "1. Open https://www.saucedemo.com/\n"
+        "2. Click the submit button (id=login-button, css=#login-button, xpath=//button[@id='login-button'])\n"
+    )
+    case = {
+        "source_blocks": ["B2"],
+        "id": "TC-201",
+        "title": "Login button",
+        "preconditions": [],
+        "tags": [],
+        "steps": [
+            _step("Open https://www.saucedemo.com/", "open", url="https://www.saucedemo.com/"),
+            _step("Click the submit button", "click", locator="id=login-button",
+                  alternate_locators=["css=#login-button", "xpath=//button[@id='login-button']"]),
+        ],
+    }
+
+    data_set = _extractor(FakeComplete({"cases": [case], "not_test_cases": []})).extract(source, TestDataFormat.TEXT)
+
+    click = data_set.cases[0].steps[1]
+    assert click.target == "id=login-button"
+    assert click.alternate_locators == ["css=#login-button", "xpath=//button[@id='login-button']"]
+
+
+def test_an_alternate_locator_not_in_the_source_is_dropped_and_reported() -> None:
+    source = (
+        "# Login - locators\n\n"
+        "TC-202: Login button\n"
+        "1. Click the submit button (id=login-button, css=#login-button)\n"
+    )
+    case = {
+        "source_blocks": ["B2"], "id": "TC-202", "title": "Login button", "preconditions": [], "tags": [],
+        "steps": [
+            _step("Click the submit button", "click", locator="id=login-button",
+                  alternate_locators=["css=#login-button", "css=.invented"]),
+        ],
+    }
+
+    data_set = _extractor(FakeComplete({"cases": [case], "not_test_cases": []})).extract(source, TestDataFormat.TEXT)
+
+    assert data_set.cases[0].steps[0].alternate_locators == ["css=#login-button"]
+    assert any("css=.invented" in warning for warning in data_set.warnings)
+
+
+def test_a_locator_from_another_section_of_the_source_is_kept() -> None:
+    source = (
+        "PROJECT: Demo\n"
+        "BASE URL: https://demo.example/login\n"
+        "\n"
+        "Scenario: Valid login\n"
+        "1. Type Admin in the Username field\n"
+        "2. Click the Login button\n"
+        "Expected: the dashboard is shown\n"
+        "\n"
+        "SELECTORS\n"
+        "Username field: name = username ; css = input[name='username']\n"
+        "Dashboard title: css = .oxd-topbar-header-breadcrumb h6"
+    )
+    # The case cites only the scenario block; its url and locators are written in other sections of the source.
+    case = {
+        "source_blocks": ["B2"], "id": "TC-1", "title": "Valid login", "preconditions": [], "tags": [],
+        "steps": [
+            _step("Open the login page", "open", url="https://demo.example/login"),
+            _step("Type Admin in the Username field", "type", target_hint="Username field",
+                  locator="name=username", alternate_locators=["css=input[name='username']"], value="Admin"),
+            _step("Click the Login button", "click", target_hint="Login button"),
+            _step("the dashboard is shown", "verify_visible", target_hint="Dashboard title",
+                  locator="css=.oxd-topbar-header-breadcrumb h6", expected="the dashboard is shown"),
+        ],
+    }
+
+    data_set = _extractor(FakeComplete({"cases": [case], "not_test_cases": []})).extract(source, TestDataFormat.TEXT)
+
+    steps = data_set.cases[0].steps
+    assert steps[0].target == "https://demo.example/login"
+    assert (steps[1].target, steps[1].alternate_locators) == ("name=username", ["css=input[name='username']"])
+    assert steps[3].target == "css=.oxd-topbar-header-breadcrumb h6"
+    assert not any("dropped" in warning for warning in data_set.warnings)
 
 
 def test_nothing_readable_is_an_error() -> None:

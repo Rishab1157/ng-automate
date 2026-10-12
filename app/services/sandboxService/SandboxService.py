@@ -297,10 +297,11 @@ class SandboxService:
         editable copy, so the user sees them in the editor. Returns how many files were applied."""
         outputs = run.outputs
         paths = [change.path for change in outputs.generation.files] if outputs.generation else []
-        # The healer's changes only when they helped (a failed heal must not damage the user's project).
+        # The healer's changes only when they helped (a failed heal must not damage the user's project), never those
+        # of a heal that was undone (the run's copy already has its files back).
         heals_kept = outputs.test_report is None or outputs.test_report.changes_kept is not False
         for attempt in outputs.test_attempts or []:
-            if attempt.heal is not None and heals_kept:
+            if attempt.heal is not None and heals_kept and not attempt.heal.undone:
                 paths.extend(change.path for change in attempt.heal.changes)
         if not paths:
             return 0

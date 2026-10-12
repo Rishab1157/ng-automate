@@ -456,3 +456,41 @@ def test_the_time_limit_sets_the_deadline_and_the_working_time_is_measured(
 
     assert 80 < deadlines[0] <= 90
     assert 0 <= outcome.seconds < 30
+
+
+def test_the_healer_sees_the_setup_that_installs_the_projects_dependencies() -> None:
+    from app.agents.HealerAgent.HealerPrompts import build_heal_prompt
+    from app.models.testRunModel import FailureClassificationModel, FailureKind, TestCommandModel, TestRunResultModel
+
+    command = TestCommandModel(tool="pytest", command="python -m pytest -q", setup="python -m pip install -q -r requirements.txt")
+    result = TestRunResultModel(
+        command=command.command, exit_code=1, duration_seconds=1.0, total=0, passed=0, failed=0, errors=0, skipped=0,
+        cases=[], output_tail="ERROR: No matching distribution found for selenium==99.0.0",
+        classification=FailureClassificationModel(kind=FailureKind.DEPENDENCY_FAILURE, healable=True, reason="r"),
+    )
+
+    prompt = build_heal_prompt(result, command, FACT_SHEET)
+
+    assert "python -m pip install -q -r requirements.txt && python -m pytest -q" in prompt
+
+
+def test_a_failure_inside_the_tests_shows_the_failing_tests_not_the_build_log() -> None:
+    from app.models.testRunModel import FailureClassificationModel, FailureKind, TestCommandModel, TestRunResultModel
+
+    def prompt_for(kind: FailureKind) -> str:
+        result = TestRunResultModel(
+            command="mvn -B -ntp test", exit_code=1, duration_seconds=1.0, total=2, passed=1, failed=1, errors=0,
+            skipped=0, cases=[], output_tail="WARNING: Unable to find CDP implementation matching 153",
+            classification=FailureClassificationModel(
+                kind=kind, healable=True, reason="r", evidence=["com.demo.CartTest.remove: element not found (at ...)"]
+            ),
+        )
+        return build_heal_prompt(result, TestCommandModel(tool="maven", command="mvn -B -ntp test"), FACT_SHEET)
+
+    locator = prompt_for(FailureKind.LOCATOR_FAILURE)
+    dependency = prompt_for(FailureKind.DEPENDENCY_FAILURE)
+
+    # A warning in the log once sent the healer to pom.xml for a test that checked an element that had gone.
+    assert "Unable to find CDP" not in locator and "com.demo.CartTest.remove" in locator
+    assert "Start in those files" in locator
+    assert "Unable to find CDP" in dependency  # for build-level failures the log is the evidence

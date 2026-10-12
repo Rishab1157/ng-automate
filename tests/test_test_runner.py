@@ -128,3 +128,45 @@ def test_output_tail_keeps_the_end_of_long_output(tmp_path: Path) -> None:
 
     assert len(result.output_tail) == MAX_OUTPUT_TAIL_CHARS
     assert result.output_tail.endswith("THE END")
+
+
+class ScriptedWorkspace(FakeWorkspace):
+    """Each command gets its own result: a failing install never reaches the tests."""
+
+    def __init__(self, project_dir: Path, results: dict[str, tuple[int, str]], report: str | None = None) -> None:
+        super().__init__(project_dir, report=report)
+        self.results = results
+
+    def execute_command(self, command: str, cwd: str, timeout: float) -> Any:
+        exit_code, stdout = self.results[command]
+        self.exit_code, self.stdout = exit_code, stdout
+        return super().execute_command(command, cwd, timeout)
+
+
+PYTEST = TestCommandModel(
+    tool="pytest", command="python -m pytest -q", setup="python -m pip install -q -r requirements.txt",
+    report_globs=["target/surefire-reports/TEST-*.xml"],
+)
+
+
+def test_declared_dependencies_are_installed_before_the_tests(tmp_path: Path) -> None:
+    workspace = ScriptedWorkspace(tmp_path, {PYTEST.setup: (0, "Successfully installed selenium"),
+                                             PYTEST.command: (0, "2 passed")}, report=PASSING_REPORT)
+
+    result = TestRunner().run(workspace, tmp_path, PYTEST)
+
+    assert [call["command"] for call in workspace.calls] == [PYTEST.setup, PYTEST.command]
+    assert result.classification.kind == FailureKind.PASSED
+    assert "Installing the project's dependencies: python -m pip install" in result.output_tail
+
+
+def test_an_install_that_fails_is_reported_and_the_tests_do_not_run(tmp_path: Path) -> None:
+    workspace = ScriptedWorkspace(tmp_path, {
+        PYTEST.setup: (1, "ERROR: No matching distribution found for selenium==99.0.0"),
+    })
+
+    result = TestRunner().run(workspace, tmp_path, PYTEST)
+
+    assert [call["command"] for call in workspace.calls] == [PYTEST.setup]
+    assert result.exit_code == 1
+    assert result.classification.kind == FailureKind.DEPENDENCY_FAILURE  # the healer's job

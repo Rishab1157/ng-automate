@@ -22,15 +22,9 @@ class RunMode(str, Enum):
     """What a run does after the project profile is ready."""
 
     ANALYZE = "analyze"  # profile only
-    TEST = "test"  # also run the project's tests, and let the healer fix build/dependency/environment failures
+    TEST = "test"  # run the project's tests; the healer fixes technical failures (build, dependencies, environment,
+    # locators, errors in the test code) and the tests run again to check each fix
     GENERATE = "generate"  # only write new tests from uploaded test data (a test run runs them)
-
-
-class RunScope(str, Enum):
-    """Generate mode: which tests run after the generator wrote its tests."""
-
-    GENERATED = "generated"  # only the tests written from the test data (a framework may hold thousands of others)
-    ALL = "all"  # the project's whole suite
 
 
 class RunStage(str, Enum):
@@ -154,9 +148,8 @@ class RunModel(BaseModel):
     test_selector: str | None = None
     # Test mode: or the test files the user picked (project-relative paths).
     test_files: list[str] | None = None
-    # Generate mode: the uploaded test data to write tests from, and which tests run afterwards.
+    # Generate mode: the uploaded test data to write tests from.
     test_data_id: str | None = None
-    run_scope: RunScope = RunScope.GENERATED
     status: RunStatus
     stage: RunStage
     outputs: RunOutputsModel = Field(default_factory=RunOutputsModel)

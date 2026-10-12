@@ -206,3 +206,18 @@ def test_jvm_test_classes_need_tests_inside(content: str | None, expected: bool)
 
     assert is_test_file("src/test/java/framework/SomeTest.java", lambda: content) is expected
     assert is_test_file("tests/test_login.py", lambda: None) is True  # only JVM classes are read
+
+
+@pytest.mark.parametrize(("frameworks", "build", "markers", "setup"), [
+    (["pytest"], "pip", ["requirements.txt", "conftest.py"], "python -m pip install -q -r requirements.txt"),
+    (["pytest"], "pip", ["requirements-test.txt", "requirements.txt"],
+     "python -m pip install -q -r requirements-test.txt -r requirements.txt"),
+    (["pytest"], "pip", ["pyproject.toml"], "python -m pip install -q -e ."),
+    (["pytest"], "pip", ["sub/requirements.txt"], None),  # only what the project root declares
+    (["Playwright Test"], "npm", ["package.json", "package-lock.json"], "npm ci && npx playwright install chromium"),
+    (["Cypress"], "Yarn", ["package.json", "yarn.lock"], "npx --yes yarn install --frozen-lockfile"),
+    (["Jest"], "npm", ["package.json"], "npm install"),
+    (["TestNG"], "Maven", ["pom.xml"], None),  # Maven resolves its own dependencies
+])
+def test_declared_dependencies_are_installed_first(frameworks: list[str], build: str, markers: list[str], setup: str | None) -> None:
+    assert resolve_test_command(_sheet(build, frameworks, markers=markers)).setup == setup

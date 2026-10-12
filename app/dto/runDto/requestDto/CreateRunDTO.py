@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from pydantic import field_validator
 
 from app.dto.common import object_id_validator
-from app.models.runModel import RunMode, RunScope
+from app.models.runModel import RunMode
 
 
 class CreateRunDTO(BaseModel):
@@ -12,7 +12,7 @@ class CreateRunDTO(BaseModel):
     mode: RunMode = Field(
         RunMode.ANALYZE,
         description="analyze: build the project profile. test: also run the project's tests and let the healer fix "
-        "build, dependency and environment failures. generate: only write new tests from uploaded test data (they are "
+        "technical failures (build, dependencies, environment, locators, errors in the test code). generate: only write new tests from uploaded test data (they are "
         "saved to the project for review; run them with a test run and their test_files). Test and generate runs "
         "reuse the project's latest profile when it has one.",
     )
@@ -31,10 +31,6 @@ class CreateRunDTO(BaseModel):
 
     test_data_id: str | None = Field(
         None, description="Generate mode only: the test data to write tests from (POST /project/{id}/test-data)."
-    )
-    run_scope: RunScope = Field(
-        RunScope.GENERATED,
-        description="No longer used: a generate run only writes the tests. Kept so older clients still work.",
     )
 
     _validate_project_id = object_id_validator("project_id")

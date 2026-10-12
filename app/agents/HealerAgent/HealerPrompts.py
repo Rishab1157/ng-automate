@@ -6,7 +6,7 @@ from app.agents.TestGeneratorAgent.GeneratedTestPlacement import UNVERIFIED_MARK
 from app.models.analyzerModel import FactSheetModel
 from app.models.healerModel import HealOutcomeModel
 from app.models.healMemoryModel import HealMemoryModel, HealMemoryResult
-from app.models.testRunModel import TestCommandModel, TestRunResultModel
+from app.models.testRunModel import FailureKind, TestCommandModel, TestRunResultModel
 from app.utils.AgentPromptRules import PLAIN_TOOL_VALUES_RULE
 
 MAX_OUTPUT_IN_PROMPT = 6000
@@ -18,11 +18,21 @@ _MEMORY_OUTCOME: dict[HealMemoryResult, str] = {
     HealMemoryResult.FIXED: "worked: the tests passed afterwards",
     HealMemoryResult.CHANGED: "fixed that problem; a different failure came next",
     HealMemoryResult.NOT_FIXED: "did not work: the same failure came back",
+    HealMemoryResult.WORSE: "made it worse: fewer tests passed afterwards (or none ran), so it was undone",
     HealMemoryResult.BLOCKED: "the healer was blocked by the environment",
     HealMemoryResult.UNFINISHED: "unfinished: the healer stopped before the tests ran again",
 }
 # The first line of a reply that reports a blocker.
 BLOCKED_MARKER = "BLOCKED:"
+OUTPUT_SECTION = "\nEnd of the output:\n```\n{output}\n```\n"
+# Failures inside the tests (a locator, an error thrown by the test code): the failing tests and where they failed are
+# the facts. The build log around them is mostly warnings, which lead a small model astray (in a real run a Selenium
+# CDP-version warning sent the healer to pom.xml for a test that checked an element that had gone).
+TEST_LEVEL_KINDS = frozenset({FailureKind.LOCATOR_FAILURE, FailureKind.TEST_CODE_FAILURE})
+TESTS_ONLY_NOTE = (
+    "\nThe lines above are the failing tests (class or module, test, message) and where they failed in the project.\n"
+    "Start in those files. The build output is left out: here it holds only warnings, not the cause.\n"
+)
 
 _HEAL_PROMPT = """You are fixing a test-automation project in /workspace/project so that its tests can BUILD and RUN.
 
@@ -31,12 +41,7 @@ Test command (run from /workspace/project): {command}
 Last result: exit code {exit_code}; {kind} — {reason}
 Key lines:
 {evidence}
-
-End of the output:
-```
-{output}
-```
-{previous}{memories}
+{output_section}{previous}{memories}
 Find the cause yourself and fix it. You work in your own sandbox with a terminal: read the project, change code or
 configuration, install or upgrade dependencies, download tools, drivers or browsers. If one approach does not work,
 try another one.
@@ -44,19 +49,37 @@ try another one.
 Rules (a change that breaks them is rolled back automatically):
 - Fix only technical problems: dependencies and versions, build configuration, imports, syntax, tools and drivers,
   locators that do not find their element, and errors thrown by the test code itself.
+- A build that does not compile lists every error with its file and line: fix all of them. `cannot find symbol` for a
+  class means the file does not import it (or the class does not exist); for a method or variable it means the class
+  has no such member. Add the import, add the missing member, or call one that exists — do not stop while any compile
+  error is left. A type used but not found is usually a missing import: find where the project imports it (grep the
+  project for the type's name) and copy that exact import line into the failing file.
 - Test code that throws an error (a wrong key or argument, a missing method, a null value, a bad cast): fix the
   test code so it does what its test case describes, reusing the project's existing helpers, page objects and
   locator keys. Never change what a test checks.
-- A locator that does not find its element: look the element up in the project's page objects or on the live
-  page (`ngauto-find-elements <page URL>` lists the page's elements with locators checked on the live page).
+- A locator that does not find its element, or any other problem you can fix: fix it. The user's test data (mounted
+  read-only at /workspace/test-data) often lists several locators for the same element; when the one in the test does
+  not match, use another the test data gives for that element (or one from the project's page objects, or from the
+  live page — `ngauto-find-elements <page URL>` lists the page's elements with locators checked on the live page).
   Change only the locator, never the action or the assertion, and end the line with the comment
   {marker}: locator changed by the healer (// in Java/JS/TS, # in Python and Robot).
 - NEVER delete, skip or disable tests; NEVER remove, weaken or comment out assertions or verification steps;
   NEVER wrap failing code in try/except or empty catch blocks.
-- Do not try to fix failing assertions or application behaviour: that is not your job.
+- Do not try to fix failing assertions or application behaviour: that is not your job. One exception: a test in an
+  `ngauto` folder was written by NG Automate's test generator from the user's test data (in /workspace/test-data).
+  When such a test does not do what its test case says (it checks another element or value than the case's own
+  verify step), correct it to follow its test case exactly.
+- Start from the evidence above: it names the failing test and where in the project it failed. Never add debugging
+  code (prints, sleeps, pauses) or a dependency the failure does not need.
 - Keep the project's style and versions where possible.
-- Change project files only with the file_editor tool (view, then str_replace). Do not edit them with sed, echo or
-  other shell commands, do not create backup copies, and do not run git.
+- Change project files only with the file_editor tool (view, then str_replace; `insert` with `insert_line` to add
+  lines; `create` for a new file). When str_replace is rejected (`did not appear verbatim`, or `Multiple occurrences
+  ... Please ensure it is unique`), never send the same call again: view the file and include the whole enclosing
+  method or statement, with enough surrounding lines, so old_str matches exactly once. `create` never overwrites a
+  file: a test file in an `ngauto` folder (written by NG Automate's test generator) that is badly broken may be
+  rewritten whole, by deleting it with `rm` in the terminal and then creating it again; edit every other file in
+  place. For a new file, make its folder with `mkdir -p` first but never `touch` the file (the editor refuses to overwrite an existing file, so the file would stay empty). Do not edit them
+  with sed, echo or other shell commands, do not create backup copies, and do not run git.
 - Put downloads and temporary files outside the project (for example in /tmp), never in /workspace/project.
 - {plain_values}
 - You may run the test command (or a quicker build step such as `mvn -q -DskipTests compile`) to check your fix.
@@ -64,9 +87,12 @@ Rules (a change that breaks them is rolled back automatically):
 
 When you are done, reply with a short summary: what was wrong, what you changed, and why.
 
-Only if the environment itself stops you and no other approach is left (for example the network or a permission
-forbids a download you need), start your reply with "{blocked}" and the reason, then copy the exact command you ran
-and the error line it printed. A failed attempt is not a blocker: try another way first."""
+Only if the environment itself stops you and no other approach is left, start your reply with "{blocked}" and the
+reason, then copy the exact command you ran and the error line it printed. A blocker is something nobody in this
+sandbox can work around: a service the user must provide (a device farm such as BrowserStack, a test account, a
+license), or a dependency or tool that cannot be obtained and has no alternative. Anything fixable — even by trying
+another locator, another version or another approach — is not a blocker: fix it first. A failed attempt is not a
+blocker: try another way first."""
 
 
 def build_heal_prompt(
@@ -79,12 +105,17 @@ def build_heal_prompt(
     evidence = "\n".join(f"- {line}" for line in result.classification.evidence) or "- (none)"
     return _HEAL_PROMPT.format(
         stack=describe_stack(fact_sheet),
-        command=command.command,
+        # With its setup: after changing what the project declares (e.g. requirements.txt) it must install again.
+        command=f"{command.setup} && {command.command}" if command.setup else command.command,
         exit_code=result.exit_code,
         kind=result.classification.kind.value,
         reason=result.classification.reason,
         evidence=evidence,
-        output=result.output_tail[-MAX_OUTPUT_IN_PROMPT:].replace("```", "'''"),
+        output_section=(
+            TESTS_ONLY_NOTE
+            if result.classification.kind in TEST_LEVEL_KINDS
+            else OUTPUT_SECTION.format(output=result.output_tail[-MAX_OUTPUT_IN_PROMPT:].replace("```", "'''"))
+        ),
         previous=_previous(previous),
         memories=_memories(memories),
         blocked=BLOCKED_MARKER,
@@ -114,7 +145,12 @@ def _previous(outcomes: Sequence[HealOutcomeModel]) -> str:
         if len(summary) > MAX_PREVIOUS_SUMMARY_CHARS:
             summary = summary[: MAX_PREVIOUS_SUMMARY_CHARS - 1] + "…"
         line = f"- Fix {number}: {summary}"
-        if outcome.changes:
+        if outcome.undone:
+            line += (
+                f" Undone: the tests got worse with its changes ({', '.join(change.path for change in outcome.changes)}),"
+                " so those files are back as they were. Do not make that change again."
+            )
+        elif outcome.changes:
             line += f" Kept changes: {', '.join(change.path for change in outcome.changes)}."
         for path in outcome.reverted_files:
             rules = ", ".join(sorted({v.rule for v in outcome.violations if v.file == path}))
@@ -144,7 +180,8 @@ def _memories(memories: Sequence[HealMemoryModel]) -> str:
             block += f"\n  Blocker: {_short(memory.blocker, MAX_MEMORY_SUMMARY_CHARS)}"
         if memory.next_run:
             block += f"\n  Next run: {memory.next_run}"
-        if memory.diff:
+        # Only a fix that worked is worth reusing; the diff of one that did not would just be copied by a small model.
+        if memory.diff and memory.succeeded:
             diff = memory.diff[:MAX_MEMORY_DIFF_CHARS].replace("```", "'''")
             block += f"\n  Diff:\n```\n{diff}\n```"
         blocks.append(block)

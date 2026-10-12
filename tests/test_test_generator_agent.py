@@ -1,4 +1,4 @@
-"""Test generator agent: prompt, skipped cases, guards and the selector, with a fake conversation (no Docker, no LLM)."""
+"""Test generator agent: prompt, batches, guards and assumed locators, with a fake conversation (no Docker, no LLM)."""
 
 import importlib
 from collections.abc import Callable
@@ -11,6 +11,7 @@ from openhands.sdk.workspace import LocalWorkspace
 from pydantic import SecretStr
 
 from app.agents.AnalyzerAgent.AgentEventMapper import AgentEvent
+from app.agents.TestGeneratorAgent.ProjectTestBriefing import project_test_briefing
 from app.agents.TestGeneratorAgent.TestGeneratorAgent import (
     GENERATOR_TOOL_NAMES,
     NUDGE_MESSAGE,
@@ -103,7 +104,7 @@ def _generate(project: Path, data: TestDataSetModel = DATA, events: list[AgentEv
     )
 
 
-def test_generated_feature_is_kept_tagged_and_selected(conversation: Callable[..., list[FakeConversation]], tmp_path: Path) -> None:
+def test_generated_feature_is_kept_as_written(conversation: Callable[..., list[FakeConversation]], tmp_path: Path) -> None:
     project = _project(tmp_path)
 
     def write_feature() -> None:
@@ -117,8 +118,7 @@ def test_generated_feature_is_kept_tagged_and_selected(conversation: Callable[..
     assert outcome.generated_cases == ["LOGIN-1", "LOGOUT-1"]  # LOGOUT-1's locator is assumed, never a reason to drop it
     assert outcome.skipped_cases == []
     assert [(f.path, f.change) for f in outcome.files] == [(FEATURE, "added")]
-    assert (project / FEATURE).read_text(encoding="utf-8").startswith("@ngauto\nFeature: Login")
-    assert outcome.selector == "@ngauto"
+    assert (project / FEATURE).read_text(encoding="utf-8").startswith("Feature: Login")  # never rewritten afterwards
     assert outcome.summary == "Wrote login.feature."
     [fake] = created
     prompt = fake.messages[0]
@@ -128,7 +128,9 @@ def test_generated_feature_is_kept_tagged_and_selected(conversation: Callable[..
     assert "NGAUTO-UNVERIFIED" in prompt and "Never leave a case out" in prompt
     assert "Preconditions" in prompt
     assert "src/test/java/com/demo/pages: page objects" in prompt
-    assert "@ngauto" in prompt
+    assert "The project's own tests and helpers" in prompt
+    assert "class LoginSteps" in prompt  # the project's own helper is inlined, so the model can reuse its API
+    assert "new .feature file" in prompt  # where the scenarios go (a Cucumber project)
     assert {tool.name for tool in fake.agent.tools} == set(GENERATOR_TOOL_NAMES)
 
 
@@ -149,7 +151,7 @@ def test_weakening_an_existing_step_or_deleting_a_file_is_rolled_back(
     assert (project / "pom.xml").is_file()
     assert outcome.reverted_files == ["pom.xml", STEPS]
     assert {v.rule for v in outcome.violations} == {"assertion_removed", "existing_code_changed", "file_deleted"}
-    assert outcome.files == [] and outcome.selector is None
+    assert outcome.files == []
 
 
 def test_stopping_early_keeps_what_was_written(conversation: Callable[..., list[FakeConversation]], tmp_path: Path) -> None:
@@ -275,6 +277,8 @@ def test_cases_go_to_the_agent_a_few_at_a_time_in_one_conversation(
     assert "(These are cases 1-2 of 5; the next ones follow once these are written.)" in first
     assert "next test cases (3-4 of 5)" in second and "CASE-3" in second and "CASE-4" in second
     assert "CASE-2" not in second and "Rules:" not in second
+    # A small model breaks files it edits (str_replace): every later batch goes into new files instead.
+    assert "NEW test files" in second and "Do not edit the test files you already wrote" in second
     assert "next test cases (5-5 of 5)" in third and "CASE-5" in third
     assert [e.message for e in events if e.type == RunEventType.AGENT_MESSAGE and "Writing tests" in e.message] == [
         "Writing tests for cases 1-2 of 5", "Writing tests for cases 3-4 of 5", "Writing tests for cases 5-5 of 5",
@@ -326,3 +330,118 @@ def test_cases_after_a_failed_batch_are_reported_as_not_generated(
         (f"CASE-{number}", "the test generator stopped before it finished this case") for number in (3, 4, 5)
     ]
     assert [f.path for f in outcome.files] == [FEATURE]  # what it wrote is kept
+
+
+def test_briefing_inlines_the_projects_tests_but_not_the_generated_folder(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    generated = project / "src/test/java/tests/ngauto/OldTest.java"
+    generated.parent.mkdir(parents=True)
+    generated.write_text("package tests.ngauto;\nclass OldTest {}\n", encoding="utf-8")
+
+    briefing = project_test_briefing(project, ["src/test"], "ngauto")
+
+    assert "src/test/java/com/demo/steps/LoginSteps.java" in briefing
+    assert "class LoginSteps" in briefing
+    assert "OldTest" not in briefing
+
+
+def test_briefing_keeps_a_base_class_when_many_files_share_the_test_folder(tmp_path: Path) -> None:
+    (tmp_path / "src/test/java").mkdir(parents=True)
+    (tmp_path / "src/test/java/BaseThing.java").write_text("class BaseThing {}\n", encoding="utf-8")
+    for number in range(30):
+        (tmp_path / f"src/test/java/Extra{number:02d}.java").write_text("class Extra {}\n", encoding="utf-8")
+
+    briefing = project_test_briefing(tmp_path, ["src/test"], "ngauto")
+
+    assert "src/test/java/BaseThing.java" in briefing
+
+
+class BuildWorkspace(LocalWorkspace):
+    """A sandbox whose build check gives scripted results, in order (the last one repeats)."""
+
+    def __init__(self, project: Path, builds: list[tuple[int, str]]) -> None:
+        super().__init__(working_dir=str(project))
+        object.__setattr__(self, "_builds", list(builds))
+        object.__setattr__(self, "_commands", [])
+
+    def execute_command(self, command: str, cwd: str | None = None, timeout: float = 30.0) -> Any:  # type: ignore[override]
+        from types import SimpleNamespace
+
+        self._commands.append(command)
+        if command == CHECKED.check:
+            exit_code, output = self._builds.pop(0) if len(self._builds) > 1 else self._builds[0]
+            return SimpleNamespace(exit_code=exit_code, stdout=output, stderr="", timeout_occurred=False)
+        return SimpleNamespace(exit_code=0, stdout="", stderr="", timeout_occurred=False)
+
+
+CHECKED = COMMAND.model_copy(update={"check": "mvn -B -ntp -q -DskipTests test-compile"})
+COMPILE_ERROR = (
+    "[INFO] Compiling 5 source files\n"
+    "[ERROR] /workspace/project/src/test/java/com/demo/ngauto/CartTest.java:[13,9] cannot find symbol\n"
+    "[ERROR]   symbol:   class LoginPage\n"
+)
+
+
+def _generate_checked(project: Path, workspace: BuildWorkspace, events: list[AgentEvent]) -> Any:
+    agent = TestGeneratorAgent(LlmConfigModel(model="openai/gpt-4o"), max_iterations=5, fix_rounds=2)
+    return agent.generate(workspace, project, DATA, FACT_SHEET, FINDINGS, CHECKED, on_event=events.append)
+
+
+def _writes_feature(project: Path) -> Callable[[], None]:
+    def write() -> None:
+        (project / FEATURE).parent.mkdir(parents=True, exist_ok=True)
+        (project / FEATURE).write_text("Feature: Login\n", encoding="utf-8")
+    return write
+
+
+def test_build_errors_go_back_to_the_generator_until_the_tests_build(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
+    project = _project(tmp_path)
+    # Before: builds. After the batch: a compile error. After the fix: builds.
+    workspace = BuildWorkspace(project, [(0, ""), (1, COMPILE_ERROR), (0, "")])
+    created = conversation(edit=_writes_feature(project))
+    events: list[AgentEvent] = []
+
+    outcome = _generate_checked(project, workspace, events)
+
+    [fake] = created
+    assert len(fake.messages) == 2
+    fix = fake.messages[1]
+    assert "does not build with the tests you wrote" in fix and "cannot find symbol" in fix and "class LoginPage" in fix
+    assert "[INFO] Compiling" not in fix  # only the lines that name the errors
+    assert outcome.builds is True
+    notices = [e.message for e in events if e.type in (RunEventType.AGENT_ERROR, RunEventType.AGENT_MESSAGE)]
+    assert "The tests do not build: asking the generator to fix the errors (1 of 2)" in notices
+    assert "The tests build" in notices
+
+
+def test_a_project_that_did_not_build_before_is_not_checked(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
+    project = _project(tmp_path)
+    workspace = BuildWorkspace(project, [(1, COMPILE_ERROR)])  # broken before anything was added
+    created = conversation(edit=_writes_feature(project))
+    events: list[AgentEvent] = []
+
+    outcome = _generate_checked(project, workspace, events)
+
+    assert len(created[0].messages) == 1  # the project's own errors never go to the generator
+    assert outcome.builds is None
+    assert any("does not build before any test is added" in e.message for e in events)
+
+
+def test_tests_that_never_build_are_left_to_the_healer(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
+    project = _project(tmp_path)
+    workspace = BuildWorkspace(project, [(0, ""), (1, COMPILE_ERROR)])
+    created = conversation(edit=_writes_feature(project))
+    events: list[AgentEvent] = []
+
+    outcome = _generate_checked(project, workspace, events)
+
+    assert len(created[0].messages) == 3  # the batch, then 2 fixes
+    assert outcome.builds is False
+    assert any("still do not build after 2 fixes" in e.message for e in events)
+    assert [f.path for f in outcome.files] == [FEATURE]  # what it wrote is kept for the healer

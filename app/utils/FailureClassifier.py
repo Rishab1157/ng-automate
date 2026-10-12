@@ -19,7 +19,7 @@ from app.models.testRunModel import (
 
 MAX_SCANNED_CHARS = 200_000
 MAX_EVIDENCE = 5
-MAX_EVIDENCE_CHARS = 400
+MAX_EVIDENCE_CHARS = 600
 # Stack frames kept with an error thrown by the test code: where it was thrown.
 MAX_STACK_FRAMES = 3
 
@@ -35,6 +35,9 @@ OUTPUT_PATTERNS: list[tuple[FailureKind, re.Pattern[str]]] = [
         r"COMPILATION ERROR|cannot find symbol|Compilation failed|error: ';' expected|SyntaxError"
         r"|IndentationError|error TS\d+|Execution failed for task ':[\w:]*compile"
         r"|ImportError while importing test module|package [\w.]+ does not exist"
+        # A build file that no longer parses (a broken edit): Maven, Gradle, npm.
+        r"|Malformed POM|Non-parseable POM|problems were encountered while processing the POMs"
+        r"|Could not compile (?:build|settings) file|EJSONPARSE|Failed to parse JSON"
         # BDD steps without step definitions (wrong glue path, or new feature files): missing code, not a test result.
         r"|UndefinedStep|step\(s\) are undefined|step is undefined|StepDefinitionNotFoundError|You can implement missing steps",
         re.IGNORECASE,
@@ -43,10 +46,26 @@ OUTPUT_PATTERNS: list[tuple[FailureKind, re.Pattern[str]]] = [
         r"SessionNotCreatedException|This version of ChromeDriver only supports|cannot find Chrome binary"
         r"|chromedriver.*(not found|unexpectedly exited)|Executable doesn't exist|npx playwright install"
         r"|JAVA_HOME|invalid target release|UnsupportedClassVersionError|: command not found|mvn: not found"
-        r"|gradle: not found|DevToolsActivePort|Unable to obtain driver",
+        r"|gradle: not found|DevToolsActivePort|Unable to obtain driver"
+        # The sandbox could not reach the network (a driver/browser download, a package index): the tests never
+        # ran, so this is the environment's problem, not a failed check.
+        r"|UnknownHostException|NoRouteToHostException|ConnectException|SocketTimeoutException|UnknownHost"
+        r"|Temporary failure in name resolution|Name or service not known|getaddrinfo|Network is unreachable"
+        r"|Connection (?:refused|reset|timed out)|Read timed out|Failed to download|Could not download"
+        r"|WebDriverManagerException|Selenium Manager",
         re.IGNORECASE,
     )),
 ]
+
+# A failing test's message that means the environment (network, driver download, toolchain) stopped the run before
+# the test could check anything. Checked on the failing cases too: the build output may not repeat the message.
+ENVIRONMENT_MESSAGE_PATTERN = re.compile(
+    r"UnknownHostException|NoRouteToHostException|ConnectException|SocketTimeoutException|UnknownHost"
+    r"|Temporary failure in name resolution|Name or service not known|getaddrinfo|Network is unreachable"
+    r"|Connection (?:refused|reset|timed out)|Read timed out|Failed to download|Could not download"
+    r"|WebDriverManagerException|Selenium Manager|Unable to obtain driver|SessionNotCreatedException",
+    re.IGNORECASE,
+)
 
 # Test failure messages that mean "the element was not found": a locator or test data problem.
 LOCATOR_PATTERN = re.compile(
@@ -65,6 +84,14 @@ CODE_ERROR_PATTERN = re.compile(
     r"|NoSuchMethodError|NoSuchFieldError|NoClassDefFoundError|ClassNotFoundException|ExceptionInInitializerError"
     r"|AttributeError|NameError|UnboundLocalError|TypeError|KeyError|IndexError|ReferenceError)\b"
     r"|is not a function|Cannot read propert(?:y|ies) of (?:undefined|null)|fixture '[^']{1,100}' not found",
+)
+
+# Stack frames of the runtimes and libraries tests run on. The first frames outside them show where in the project a
+# test failed (Java/Kotlin package frames; Python and JavaScript frames are told apart by their file paths).
+LIBRARY_FRAME_PATTERN = re.compile(
+    r"^at (?:java|javax|jdk|sun|com\.sun|kotlin|org\.openqa|org\.testng|org\.junit|junit|io\.cucumber|org\.apache"
+    r"|org\.gradle|org\.assertj|org\.hamcrest|io\.restassured|org\.springframework)\."
+    r"|site-packages|dist-packages|node_modules|<frozen |internal/"
 )
 
 NO_TESTS_PATTERN = re.compile(
@@ -102,21 +129,31 @@ def classify_failure(exit_code: int, output: str, cases: list[TestCaseResultMode
             return _result(kind, lines)
 
     if failing:
-        messages = [f"{case.name}: {case.message or case.details or ''}" for case in failing]
+        # The environment can stop every test in a setup method (driver download, network) without the build output
+        # naming it: the failing cases' own messages still do. Those failures are technical, not failed checks; but
+        # only when they are most of the failures (one test hitting a network error must not hide real failed checks).
+        environment = [
+            _failure_line(case)
+            for case in failing
+            if (case.message or case.details) and ENVIRONMENT_MESSAGE_PATTERN.search(f"{case.message or ''}\n{case.details or ''}")
+        ]
+        if len(environment) * 2 > len(failing):
+            return _result(FailureKind.ENVIRONMENT_FAILURE, environment)
+
         locator: list[str] = []
         code: list[str] = []
-        for case, message in zip(failing, messages, strict=True):
+        for case in failing:
             error = _code_error(case)
-            if LOCATOR_PATTERN.search(message):
-                locator.append(message)
+            if LOCATOR_PATTERN.search(f"{case.name}: {case.message or case.details or ''}"):
+                locator.append(_failure_line(case))
             elif error:
-                code.append(f"{case.name}: {error}")
+                code.append(f"{_test_label(case)}: {error}")
         # Mostly technical problems in the tests (not checks that failed): the larger kind decides.
-        if (len(locator) + len(code)) * 2 > len(messages):
+        if (len(locator) + len(code)) * 2 > len(failing):
             if len(code) > len(locator):
                 return _result(FailureKind.TEST_CODE_FAILURE, code)
             return _result(FailureKind.LOCATOR_FAILURE, locator)
-        return _result(FailureKind.TEST_FAILURE, messages)
+        return _result(FailureKind.TEST_FAILURE, [_failure_line(case) for case in failing])
 
     if NO_TESTS_PATTERN.search(tail):
         return _result(FailureKind.NO_TESTS, _matching_lines(tail, NO_TESTS_PATTERN))
@@ -125,17 +162,47 @@ def classify_failure(exit_code: int, output: str, cases: list[TestCaseResultMode
 
 def _code_error(case: TestCaseResultModel) -> str | None:
     """The error line when a failing test threw a programming error (checked on the first line of the message and of
-    the stack trace, where the exception's type is), else None. The first stack frames are added: they point at the
-    code that threw, e.g. "(at framework.Config.locator(Config.java:31) < at framework.BaseTest.byLocator(...))"."""
+    the stack trace, where the exception's type is), else None. With where in the project it was thrown, e.g.
+    "(at framework.Config.locator(Config.java:31) < at framework.BaseTest.byLocator(...))"."""
     for text in (case.message, case.details):
         first = (text or "").strip().splitlines()[0] if (text or "").strip() else ""
         if first and CODE_ERROR_PATTERN.search(first) and "AssertionError" not in first:
-            frames = [
-                line.strip() for line in (case.details or "").splitlines()[1:]
-                if line.strip().startswith(("at ", 'File "'))
-            ][:MAX_STACK_FRAMES]
-            return f"{first} ({' < '.join(frames)})" if frames else first
+            return _with_frames(first, case)
     return None
+
+
+def _failure_line(case: TestCaseResultModel) -> str:
+    """One failing test as the healer reads it: which test (with its class or module), the first line of its message
+    (the rest is often the driver's boilerplate), and where in the project it failed."""
+    first = next((line.strip() for line in (case.message or case.details or "").splitlines() if line.strip()), "")
+    return f"{_test_label(case)}: {_with_frames(first, case)}"
+
+
+def _test_label(case: TestCaseResultModel) -> str:
+    """e.g. "com.demo.tests.CartTest.removeProduct" (the class or module tells which file the test is in)."""
+    if case.suite and not case.name.startswith(case.suite):
+        return f"{case.suite}.{case.name}"
+    return case.name
+
+
+def _with_frames(line: str, case: TestCaseResultModel) -> str:
+    frames = _project_frames(case)
+    return f"{line} ({' < '.join(frames)})" if frames else line
+
+
+def _project_frames(case: TestCaseResultModel) -> list[str]:
+    """The first frames of the project's own code, always with the test's own frame (the line in the test file),
+    which a deep helper chain would otherwise push out."""
+    frames = [
+        frame for frame in (raw.strip() for raw in (case.details or "").splitlines()[1:])
+        if frame.startswith(("at ", 'File "')) and not LIBRARY_FRAME_PATTERN.search(frame)
+    ]
+    test = case.name.split("[", 1)[0]  # pytest parameters: test_login[admin]
+    own = next((frame for frame in frames if f".{test}(" in frame or frame.endswith(f"in {test}")), None)
+    chosen = frames[:MAX_STACK_FRAMES]
+    if own is not None and own not in chosen:
+        chosen = [*frames[: MAX_STACK_FRAMES - 1], own]
+    return chosen
 
 
 def _result(kind: FailureKind, evidence: list[str] | None = None) -> FailureClassificationModel:

@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 MAX_OUTPUT_TAIL_CHARS = 20_000
 TIMED_OUT_NOTE = "\n[NG Automate] The test command was stopped after {seconds} seconds."
+SETUP_NOTE = "[NG Automate] Installing the project's dependencies: {command}\n"
 
 
 class TestRunner:
@@ -32,10 +33,20 @@ class TestRunner:
         _remove_old_reports(project_dir, command.report_globs)
         cwd = str(PurePosixPath(SANDBOX_PROJECT_DIR) / command.working_dir)
         started = time.monotonic()
-        result = workspace.execute_command(command.command, cwd=cwd, timeout=self.timeout_seconds)
+        setup_output = ""
+        result = None
+        if command.setup:
+            # The project's declared dependencies first: when they cannot be installed the tests are not run, and
+            # the install's own output tells who handles it (e.g. a version that does not exist goes to the healer).
+            result = workspace.execute_command(command.setup, cwd=cwd, timeout=self.timeout_seconds)
+            setup_output = SETUP_NOTE.format(command=command.setup) + f"{result.stdout}\n{result.stderr}".strip() + "\n"
+            if result.exit_code == 0 and not result.timeout_occurred:
+                result = None
+        if result is None:
+            result = workspace.execute_command(command.command, cwd=cwd, timeout=self.timeout_seconds)
         duration = time.monotonic() - started
 
-        output = f"{result.stdout}\n{result.stderr}".strip()
+        output = (setup_output + f"{result.stdout}\n{result.stderr}").strip()
         if result.timeout_occurred:
             output += TIMED_OUT_NOTE.format(seconds=self.timeout_seconds)
         exit_code = result.exit_code if not result.timeout_occurred else 124

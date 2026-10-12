@@ -30,3 +30,5 @@ class HealOutcomeModel(BaseModel):
     blocker_rejected: bool = False
     # Time the healer worked, without paused time: counts against the run's healing budget.
     seconds: float = 0.0
+    # The test run after this heal was worse (fewer tests passed, or none ran), so its changes were put back.
+    undone: bool = False

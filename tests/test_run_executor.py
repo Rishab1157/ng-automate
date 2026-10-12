@@ -244,8 +244,7 @@ async def test_successful_run_is_completed_and_cleaned_up() -> None:
     assert done.error is None
     assert graph.states == [
         {"run_id": run.id, "org_id": run.org_id, "project_id": run.project_id, "model_connection_id": None,
-         "mode": "analyze", "test_selector": None, "test_files": None, "test_data_id": None,
-         "run_scope": "generated"}
+         "mode": "analyze", "test_selector": None, "test_files": None, "test_data_id": None}
     ]
     assert runs.events == [(run.id, RunEventType.RUN_COMPLETED, RUN_COMPLETED_MESSAGE, {"profile_id": "profile-1"})]
     assert sandbox.stopped == []
@@ -258,7 +257,8 @@ async def test_test_run_reports_the_test_outcome_when_it_completes() -> None:
     run = make_run()
     runs = FakeRunService(run)
     report = {"outcome": "passed", "stop_reason": "passed", "detail": None, "runs": 2, "heals": 1, "total": 3,
-              "passed": 3, "failed": 0, "errors": 0, "skipped": 0, "changed_files": ["pom.xml"]}
+              "passed": 3, "failed": 0, "errors": 0, "skipped": 0, "changed_files": ["pom.xml"],
+              "changes_kept": True}
 
     async def tests_passed(state: dict[str, Any]) -> dict[str, Any]:
         return {**state, "profile_id": "profile-1", "test_report": report}

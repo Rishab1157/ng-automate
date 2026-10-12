@@ -83,7 +83,6 @@ async def create_run(
         test_selector=dto.test_selector,
         test_files=dto.test_files,
         test_data_id=dto.test_data_id,
-        run_scope=dto.run_scope,
     )
     await run_executor.submit(run.id)
     return RunResponseDTO.from_model(run)
