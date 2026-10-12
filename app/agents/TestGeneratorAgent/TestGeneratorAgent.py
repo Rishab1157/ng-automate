@@ -13,6 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from openhands.sdk import Agent, Conversation, Tool
+from openhands.sdk.conversation.base import BaseConversation
 from openhands.sdk.workspace import BaseWorkspace
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.glob import GlobTool
@@ -26,8 +27,9 @@ from app.agents.TestGeneratorAgent.GeneratedTestPlacement import (
     placement_rule,
     runnable_cases,
     tag_untagged_features,
+    unverified_locators,
 )
-from app.agents.TestGeneratorAgent.TestGeneratorPrompts import build_generate_prompt
+from app.agents.TestGeneratorAgent.TestGeneratorPrompts import build_generate_prompt, build_next_batch_prompt
 from app.config import settings
 from app.core.exceptions import ErrorMessages, GenerationError, ValidationError
 from app.models.analyzerModel import AnalyzerFindingsModel, FactSheetModel
@@ -45,7 +47,7 @@ from app.utils.AgentConversationUtils import (
     secret_values,
 )
 from app.utils.LlmInstance import build_llm
-from app.utils.ProjectSnapshot import ProjectSnapshot
+from app.utils.ProjectSnapshot import ProjectSnapshot, project_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +56,13 @@ MAX_SUMMARY_CHARS = 2000
 NO_SUMMARY = "The test generator finished without a summary."
 REVERTED_NOTICE = "Rolled back {path}: the change broke the generator's rules ({rules})"
 # A small model often replies with a plan instead of a tool call, which ends its turn before it wrote anything.
-NUDGE_NOTICE = "The generator stopped before writing any file: asking it to continue ({attempt} of {total})"
+NUDGE_NOTICE = "The generator stopped without writing the tests for these cases: asking it to continue ({attempt} of {total})"
 NUDGE_MESSAGE = (
-    "You have not written any file yet. Continue now: create the test files with the file_editor tool, following "
-    "the rules above. Do not stop to explain or plan; reply only when the files are written."
+    "You have not written the tests for these cases yet. Continue now: create or extend the test files with the "
+    "file_editor tool, following the rules above. Do not stop to explain or plan; reply only when the files are written."
 )
+BATCH_NOTICE = "Writing tests for cases {first}-{last} of {total}"
+NOT_REACHED = "the test generator stopped before it finished this case"
 GIT_DIR = ".git"
 
 
@@ -71,11 +75,13 @@ class TestGeneratorAgent:
         max_iterations: int = settings.GENERATOR_MAX_ITERATIONS,
         timeout_seconds: float = settings.GENERATOR_TIMEOUT_SECONDS,
         nudges: int = settings.GENERATOR_NUDGES,
+        batch_size: int = settings.GENERATOR_BATCH_SIZE,
     ) -> None:
         self.llm_config = llm_config
         self.max_iterations = max_iterations
         self.timeout_seconds = timeout_seconds
         self.nudges = nudges
+        self.batch_size = max(1, batch_size)
 
     def generate(
         self,
@@ -109,21 +115,28 @@ class TestGeneratorAgent:
             # No extra LLM call to name the conversation: the shared local model is slow.
             autotitle=False,
         )
-        prompt = build_generate_prompt(cases, fact_sheet, findings, command, placement_rule(fact_sheet))
-        deadline = time.monotonic() + self.timeout_seconds
+        batches = [cases[start:start + self.batch_size] for start in range(0, len(cases), self.batch_size)]
         error: str | None = None
-        answer = ""
+        answers: list[str] = []
+        done = 0  # cases whose batch the agent finished
         try:
-            answer = ask(conversation, prompt, deadline, _generation_failed, control)
-            for attempt in range(1, self.nudges + 1):
-                if _wrote_files(snapshot):
+            for batch in batches:
+                if control is not None and control.is_stopped:
                     break
-                forwarder.notify(AgentEvent(
-                    RunEventType.AGENT_ERROR,
-                    RunEventLevel.INFO,
-                    NUDGE_NOTICE.format(attempt=attempt, total=self.nudges),
-                ))
-                answer = ask(conversation, NUDGE_MESSAGE, deadline, _generation_failed, control)
+                if len(batches) > 1:
+                    forwarder.notify(AgentEvent(
+                        RunEventType.AGENT_MESSAGE,
+                        RunEventLevel.INFO,
+                        BATCH_NOTICE.format(first=done + 1, last=done + len(batch), total=len(cases)),
+                        {"cases": [case.id for case in batch], "first": done + 1, "total": len(cases)},
+                    ))
+                prompt = (
+                    build_generate_prompt(batch, fact_sheet, findings, command, placement_rule(fact_sheet), len(cases))
+                    if done == 0
+                    else build_next_batch_prompt(batch, done + 1, len(cases))
+                )
+                answers.append(self._write_batch(conversation, prompt, snapshot.root, forwarder, control))
+                done += len(batch)
         except GenerationError as failure:
             error = failure.message
         finally:
@@ -146,17 +159,43 @@ class TestGeneratorAgent:
         kept = [change for change in changes if change.path not in reverted]
         if tag_untagged_features(snapshot.root, kept):
             kept = [change for change in snapshot.changes() if change.path not in reverted]
-        logger.info("Generator wrote %d file(s), %d rolled back", len(kept), len(reverted))
+        logger.info("Generator wrote %d file(s) for %d of %d case(s), %d rolled back", len(kept), done, len(cases), len(reverted))
+        skipped += [(case.id, NOT_REACHED) for case in cases[done:]]
+        summary = "\n\n".join(answer.strip() for answer in answers if answer.strip())
         return GenerationOutcomeModel(
-            summary=(answer.strip() or NO_SUMMARY)[:MAX_SUMMARY_CHARS],
+            summary=(summary or NO_SUMMARY)[:MAX_SUMMARY_CHARS],
             files=kept,
-            generated_cases=[case.id for case in cases],
+            generated_cases=[case.id for case in cases[:done]],
             skipped_cases=[SkippedCaseModel(case_id=case_id, reason=reason) for case_id, reason in skipped],
             selector=generated_selector(fact_sheet, kept),
             violations=violations,
             reverted_files=reverted,
+            unverified_locators=unverified_locators(snapshot.root, kept),
             error=error,
         )
+
+    def _write_batch(
+        self,
+        conversation: BaseConversation,
+        prompt: str,
+        project_root: Path,
+        forwarder: EventForwarder,
+        control: AgentControl | None,
+    ) -> str:
+        """Send one batch and let the agent work; nudge it when it stops before changing any file. Its final answer."""
+        before = project_fingerprint(project_root)
+        deadline = time.monotonic() + self.timeout_seconds
+        answer = ask(conversation, prompt, deadline, _generation_failed, control)
+        for attempt in range(1, self.nudges + 1):
+            if (control is not None and control.is_stopped) or project_fingerprint(project_root) != before:
+                break
+            forwarder.notify(AgentEvent(
+                RunEventType.AGENT_ERROR,
+                RunEventLevel.INFO,
+                NUDGE_NOTICE.format(attempt=attempt, total=self.nudges),
+            ))
+            answer = ask(conversation, NUDGE_MESSAGE, deadline, _generation_failed, control)
+        return answer
 
     def _build_agent(self) -> Agent:
         llm = build_llm(self.llm_config)
@@ -165,10 +204,6 @@ class TestGeneratorAgent:
             tools=[Tool(name=name) for name in GENERATOR_TOOL_NAMES],
             condenser=build_condenser(llm, self.llm_config.num_ctx),
         )
-
-
-def _wrote_files(snapshot: ProjectSnapshot) -> bool:
-    return any(change.change != "deleted" for change in snapshot.changes())
 
 
 def _generation_failed(reason: str) -> GenerationError:

@@ -21,8 +21,11 @@ from app.dto.runDto import (
     RunResponseDTO,
     TestAttemptResponseDTO,
 )
+from app.dto.projectDto import ProjectFileContentResponseDTO, RunFilesResponseDTO
 from app.models.authModel import CurrentUserMapper, CurrentUserModel
+from app.models.runModel import RunMode
 from app.permissions.ngAutomatePermission import NGAUTOMATE_ACCESS_ALL_ORGS, NGAUTOMATE_ACCESS_PERM
+from app.services.projectService import ProjectFileService
 from app.services.runCommandService import RunCommandService
 from app.services.runService import RunEventStreamService, RunService, RunStreamItem
 
@@ -52,6 +55,7 @@ socket_router = APIRouter(prefix="/tx-agents/ng-automate/run", tags=["NG Automat
 run_service = RunService()
 run_event_stream_service = RunEventStreamService(run_service)
 run_command_service = RunCommandService(run_service)
+project_file_service = ProjectFileService(run_service=run_service)
 
 
 @router.post(
@@ -59,7 +63,7 @@ run_command_service = RunCommandService(run_service)
     status_code=status.HTTP_202_ACCEPTED,
     response_model=RunResponseDTO,
     summary="Start a run: analyze a project; or also run and heal its tests (mode=test); or write new tests from "
-    "test data, then run and heal them (mode=generate). The run continues in the background: follow it with "
+    "test data, saved to the project for review (mode=generate). The run continues in the background: follow it with "
     "GET /{run_id} and its events.",
 )
 async def create_run(
@@ -77,11 +81,28 @@ async def create_run(
         model_connection_id=model_connection_id,
         mode=dto.mode,
         test_selector=dto.test_selector,
+        test_files=dto.test_files,
         test_data_id=dto.test_data_id,
         run_scope=dto.run_scope,
     )
     await run_executor.submit(run.id)
     return RunResponseDTO.from_model(run)
+
+
+@router.get(
+    "/",
+    response_model=list[RunResponseDTO],
+    summary="A project's runs, newest first (optionally only one mode): where its analyze, generate and test "
+    "steps stand.",
+)
+async def list_runs(
+    project_id: str = Query(description="The project"),
+    mode: RunMode | None = Query(None, description="Only runs of this mode"),
+    limit: int = Query(20, ge=1, le=100),
+    org_id: str = Depends(resolve_org_id),
+) -> list[RunResponseDTO]:
+    runs = await run_service.list_for_project(project_id, org_id, mode, limit)
+    return [RunResponseDTO.from_model(run) for run in runs]
 
 
 @router.get(
@@ -91,6 +112,29 @@ async def create_run(
 )
 async def get_run(run_id: str, org_id: str = Depends(resolve_org_id)) -> RunResponseDTO:
     return RunResponseDTO.from_model(await run_service.get(run_id, org_id))
+
+
+@router.get(
+    "/{run_id}/files",
+    response_model=RunFilesResponseDTO,
+    summary="The run's copy of the project while its agents work on it, and what they changed so far (with diffs). "
+    "live=false once the run's copy is gone: its changes are then in the project's files.",
+)
+async def get_run_files(run_id: str, org_id: str = Depends(resolve_org_id)) -> RunFilesResponseDTO:
+    return RunFilesResponseDTO.from_model(await project_file_service.run_files(run_id, org_id))
+
+
+@router.get(
+    "/{run_id}/files/content",
+    response_model=ProjectFileContentResponseDTO,
+    summary="One file of the run's copy as it is right now (read-only).",
+)
+async def get_run_file(
+    run_id: str,
+    path: str = Query(min_length=1, max_length=1000, description="Path inside the project, e.g. pom.xml"),
+    org_id: str = Depends(resolve_org_id),
+) -> ProjectFileContentResponseDTO:
+    return ProjectFileContentResponseDTO.from_model(await project_file_service.read_run_file(run_id, org_id, path))
 
 
 @router.get(

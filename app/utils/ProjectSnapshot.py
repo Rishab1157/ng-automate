@@ -32,15 +32,7 @@ class ProjectSnapshot:
 
     def changes(self) -> list[FileChangeModel]:
         """What changed since the snapshot, sorted by path."""
-        current = _read_text_files(self.root)
-        changes: list[FileChangeModel] = []
-        for path in sorted(self.files.keys() | current.keys()):
-            before, after = self.files.get(path), current.get(path)
-            if before == after:
-                continue
-            change = "added" if before is None else "deleted" if after is None else "modified"
-            changes.append(FileChangeModel(path=path, change=change, diff=_diff(path, before or "", after or "")))
-        return changes
+        return _compare(self.files, _read_text_files(self.root))
 
     def content(self, path: str) -> str | None:
         return self.files.get(path)
@@ -64,6 +56,22 @@ def project_fingerprint(project_dir: Path) -> str:
     for path, text in sorted(_read_text_files(project_dir.resolve()).items()):
         digest.update(path.encode("utf-8") + b"\0" + hashlib.sha256(text.encode("utf-8")).digest())
     return digest.hexdigest()
+
+
+def compare_projects(before_dir: Path, after_dir: Path) -> list[FileChangeModel]:
+    """How the text files of `after_dir` differ from `before_dir` (e.g. a run's copy against the project), by path."""
+    return _compare(_read_text_files(before_dir.resolve()), _read_text_files(after_dir.resolve()))
+
+
+def _compare(before_files: dict[str, str], after_files: dict[str, str]) -> list[FileChangeModel]:
+    changes: list[FileChangeModel] = []
+    for path in sorted(before_files.keys() | after_files.keys()):
+        before, after = before_files.get(path), after_files.get(path)
+        if before == after:
+            continue
+        change = "added" if before is None else "deleted" if after is None else "modified"
+        changes.append(FileChangeModel(path=path, change=change, diff=_diff(path, before or "", after or "")))
+    return changes
 
 
 def _read_text_files(root: Path) -> dict[str, str]:

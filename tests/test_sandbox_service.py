@@ -723,3 +723,76 @@ def test_sandbox_starts_again_when_its_port_was_taken_in_the_meantime(tmp_path: 
         assert session.container_id == CONTAINER_ID
 
     assert len(calls) == 2
+
+
+# ---------- the project's editable copy, test data and write-back ----------
+
+
+def test_a_run_starts_from_the_edited_project_not_the_original_upload(service: SandboxService) -> None:
+    _store_archive(service, make_zip(SAMPLE_FILES))
+    working = service.storage.ensure_working_copy(PROJECT_ID)
+    (working / "pom.xml").write_text("<project>edited by the user</project>")
+
+    project_dir = service.prepare_project_dir(PROJECT_ID, RUN_ID)
+
+    assert (project_dir / "pom.xml").read_text() == "<project>edited by the user</project>"
+    assert (project_dir / "src/test/java/LoginTest.java").read_text() == SAMPLE_FILES["src/test/java/LoginTest.java"]
+
+
+def test_the_test_sandbox_sees_the_test_data_read_only_beside_the_project(
+    service: SandboxService, factory: FakeWorkspaceFactory, tmp_path: Path
+) -> None:
+    test_data = tmp_path / "test-data"
+    test_data.mkdir()
+    (test_data / "users.csv").write_text("name\nadmin\n")
+
+    with service.open_writable(_project_dir(tmp_path), ORG_ID, test_data_dir=test_data):
+        pass
+    (tmp_path / "other").mkdir()
+    with service.open_writable(_project_dir(tmp_path / "other"), ORG_ID, test_data_dir=tmp_path / "missing"):
+        pass
+
+    with_data, without = factory.calls
+    assert f"{test_data.resolve()}:/workspace/test-data:ro" in with_data["volumes"]
+    assert not any(volume.endswith(":/workspace/test-data:ro") for volume in without["volumes"])
+
+
+def test_what_a_completed_run_kept_is_written_back_to_the_project(service: SandboxService) -> None:
+    from types import SimpleNamespace
+
+    _store_archive(service, make_zip({**SAMPLE_FILES, "old.txt": "remove me"}))
+    project_dir = service.prepare_project_dir(PROJECT_ID, RUN_ID)
+    (project_dir / "src/test/java/GeneratedTest.java").write_text("class GeneratedTest {}")  # the generator
+    (project_dir / "pom.xml").write_text("<project>healed</project>")  # the healer
+    (project_dir / "old.txt").unlink()  # the healer
+    (project_dir / "logs").mkdir()
+    (project_dir / "logs/run.log").write_text("written by the test run, not by an agent")
+    change = lambda path: SimpleNamespace(path=path)  # noqa: E731
+    run = SimpleNamespace(
+        id=RUN_ID,
+        project_id=PROJECT_ID,
+        outputs=SimpleNamespace(
+            generation=SimpleNamespace(files=[change("src/test/java/GeneratedTest.java")]),
+            test_attempts=[SimpleNamespace(heal=SimpleNamespace(changes=[change("pom.xml"), change("old.txt")])),
+                           SimpleNamespace(heal=None)],
+        ),
+    )
+
+    applied = service.write_back_run_changes(run)  # type: ignore[arg-type]
+
+    working = service.storage.working_dir(PROJECT_ID)
+    assert applied == 3
+    assert (working / "src/test/java/GeneratedTest.java").read_text() == "class GeneratedTest {}"
+    assert (working / "pom.xml").read_text() == "<project>healed</project>"
+    assert not (working / "old.txt").exists()
+    assert not (working / "logs").exists()  # only what the agents changed comes back
+
+
+def test_write_back_never_leaves_the_project(service: SandboxService, tmp_path: Path) -> None:
+    _store_archive(service, make_zip(SAMPLE_FILES))
+    project_dir = service.prepare_project_dir(PROJECT_ID, RUN_ID)
+
+    applied = service.storage.apply_run_changes(PROJECT_ID, project_dir, ["../../outside.txt", "", "."])
+
+    assert applied == 0
+    assert not (tmp_path / "outside.txt").exists()

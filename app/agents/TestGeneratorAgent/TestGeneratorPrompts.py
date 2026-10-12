@@ -1,8 +1,10 @@
 """The test generator's task message, kept compact for a small local model."""
 
+from app.agents.TestGeneratorAgent.GeneratedTestPlacement import UNVERIFIED_MARKER
 from app.models.analyzerModel import AnalyzerFindingsModel, FactModel, FactSheetModel
 from app.models.testDataModel import TestCaseSpecModel, TestStepModel
 from app.models.testRunModel import TestCommandModel
+from app.utils.AgentPromptRules import PLAIN_TOOL_VALUES_RULE
 
 MAX_IMPORTANT_PATHS = 12
 
@@ -14,28 +16,48 @@ Important places:
 {important_paths}
 The tests run with: {command}
 
-Write one automated test for each of these test cases (from the user's test data):
+Write one automated test for each of these test cases (from the user's test data):{batch_note}
 {cases}
 
 Rules:
 - First read a few existing tests and the page objects / step definitions / helpers they use. Follow the same
   structure, style and naming, and reuse what exists (base classes, page objects, drivers, config, waits).
 - {placement}
-- Use exactly the URLs, locators and values given in the steps. Never invent a locator or a URL.
-- A step with element="..." names its element in words. Find its real locator: first in the project's page
-  objects; if it is not there, run `ngauto-find-elements <page URL>` in the terminal, which lists the page's
-  elements with locators checked on the live page, and use one of those. If you cannot find it, leave that case
-  out and say so in your summary.
+- Use exactly the URLs, locators and values given in the steps.
+- A step without a locator (or with element="..." naming its element in words) still gets its test. Find the
+  element's locator: first in the project's page objects (reuse it); otherwise `ngauto-find-elements <page URL>`
+  in the terminal lists the page's elements with locators checked on the live page. If you still cannot find
+  it, write your best guess. Every locator that is not in the test data and not already in the project gets the
+  comment {marker} at the end of its line (// in Java/JS/TS, # in Python, Robot and feature files), e.g.
+  `By checkout = By.id("checkout"); // {marker}: assumed locator, not in the test data`. Never leave a case out.
+- If the project keeps its locators in a file and looks them up by key (for example locators.properties read by a
+  helper), pass an existing KEY from that file (the key whose value is the step's locator) or add a new key=value
+  line to the file. Never pass a locator value where the code expects a key.
+- Assert with the project's test framework (for example TestNG Assert, JUnit Assertions, pytest assert, expect),
+  not with a language-level assert keyword that can be switched off.
+- Preconditions ("Given:") are part of the test: automate them as setup steps before the case's steps (for
+  example log in, or add an item to the cart before testing the payment), reusing the project's existing helpers,
+  page objects and steps. Never assume the application is already in that state; no person will prepare it.
 - Every "verify" step must become a real assertion. One test per case, named after the case id and title.
 - Only ADD code. Never change or remove existing lines (tests, locators, page-object methods, step definitions):
   other tests use them. If you need a different locator or a new action, add a new field, method or step.
 - Every step in a feature file you write must have a step definition: reuse existing steps or add new ones.
 - Keep working until all files are written; do not stop to explain your plan.
+- {plain_values}
 - Change files only with the file_editor tool (create, view, str_replace). Do not edit files with shell commands,
   do not create backup copies, and do not run git.
 - You may compile to check the code builds (e.g. `mvn -q -DskipTests test-compile`), but do not run the whole suite.
 
 When you are done, reply with a short summary: which files you created or changed."""
+
+_BATCH_NOTE = "\n(These are cases 1-{last} of {total}; the next ones follow once these are written.)"
+
+_NEXT_BATCH_PROMPT = """Now write the tests for the next test cases ({first}-{last} of {total}), with the same rules as before.
+Reuse what you already found and wrote: add new tests next to the ones you wrote (new files, or new tests in the
+files you created).
+{cases}
+
+When these are written, reply with a short summary: which files you created or changed."""
 
 
 MOBILE_RULE = (
@@ -50,16 +72,29 @@ def build_generate_prompt(
     findings: AnalyzerFindingsModel | None,
     command: TestCommandModel,
     placement: str,
+    total_cases: int | None = None,
 ) -> str:
+    """The first message: the project, the rules and the first cases (`total_cases` when more follow)."""
     if "Appium" in _values(fact_sheet.automation_tools):
         placement += MOBILE_RULE
+    total = total_cases or len(cases)
     return _GENERATE_PROMPT.format(
         stack=_stack(fact_sheet),
         architecture=_text(findings.architecture_pattern) if findings else "unknown",
         important_paths=_important_paths(findings),
         command=command.command,
+        batch_note=_BATCH_NOTE.format(last=len(cases), total=total) if total > len(cases) else "",
         cases="\n".join(_case(case) for case in cases),
         placement=placement,
+        marker=UNVERIFIED_MARKER,
+        plain_values=PLAIN_TOOL_VALUES_RULE,
+    )
+
+
+def build_next_batch_prompt(cases: list[TestCaseSpecModel], first: int, total: int) -> str:
+    """A later message in the same conversation: the next cases (`first` is the 1-based number of the first one)."""
+    return _NEXT_BATCH_PROMPT.format(
+        first=first, last=first + len(cases) - 1, total=total, cases="\n".join(_case(case) for case in cases)
     )
 
 

@@ -23,7 +23,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from openhands.sdk.workspace import BaseWorkspace
 from openhands.workspace import DockerWorkspace
@@ -31,11 +31,15 @@ from openhands.workspace import DockerWorkspace
 from app.config import settings
 from app.core.exceptions import ErrorMessages, NotFoundError, SandboxError
 from app.services.projectService import ProjectStorageService
-from app.utils.ArchiveUtils import extract_archive
+
+if TYPE_CHECKING:
+    from app.models.runModel import RunModel
 
 logger = logging.getLogger(__name__)
 
 SANDBOX_PROJECT_DIR = "/workspace/project"
+# The project's test-data files, read-only and next to (never inside) the project.
+SANDBOX_TEST_DATA_DIR = "/workspace/test-data"
 DOCKER_TIMEOUT_SECONDS = 60
 # Docker bridge option that, set to "false", stops containers on the network from reaching each other.
 NETWORK_ICC_OPTION = "com.docker.network.bridge.enable_icc"
@@ -142,23 +146,31 @@ class SandboxService:
         _install_log_filter()
 
     def prepare_project_dir(self, project_id: str, run_id: str) -> Path:
-        """Unzip the project's archive into a fresh folder for this run; returns its absolute path."""
+        """Copy the project's editable copy (with the user's edits) into a fresh folder for this run.
+
+        The run's agents work on that copy; what they keep is written back when the run completes. Returns the
+        copy's absolute path.
+        """
         if not _SAFE_ID_PATTERN.match(project_id):
             raise NotFoundError(ErrorMessages.PROJECT_NOT_FOUND)
-        archive = self.storage.archive_path(project_id)
-        if not archive.is_file():
+        if not self.storage.archive_path(project_id).is_file():
             raise NotFoundError(ErrorMessages.PROJECT_NOT_FOUND)
+        working = self.storage.ensure_working_copy(project_id)
 
         project_dir = self._run_dir(run_id) / "project"
         if project_dir.exists():
             shutil.rmtree(project_dir)
         try:
-            extract_archive(archive, project_dir, self.storage.max_bytes)
+            shutil.copytree(working, project_dir, symlinks=True)
         except BaseException:
             shutil.rmtree(project_dir, ignore_errors=True)
             raise
-        logger.info("Project %s unzipped for run %s", project_id, run_id)
+        logger.info("Project %s copied for run %s", project_id, run_id)
         return project_dir
+
+    def test_data_dir(self, project_id: str) -> Path:
+        """The project's test-data folder (it may not exist: the project has no test-data files yet)."""
+        return self.storage.test_data_dir(project_id)
 
     @contextmanager
     def open_readonly(
@@ -174,19 +186,26 @@ class SandboxService:
 
     @contextmanager
     def open_writable(
-        self, project_dir: Path, org_id: str, on_started: Callable[[str], None] | None = None
+        self,
+        project_dir: Path,
+        org_id: str,
+        on_started: Callable[[str], None] | None = None,
+        test_data_dir: Path | None = None,
     ) -> Iterator[SandboxSession]:
         """A running test sandbox (build tools, browser) where `project_dir` is writable, stopped on exit.
 
         Only for a run's own copy of the project: changes land in `project_dir` on the host. Build caches are
-        per organization, so one org's project can never plant packages another org's build would use.
+        per organization, so one org's project can never plant packages another org's build would use. The
+        project's test-data files, when it has any, are at /workspace/test-data (read-only).
         """
         if not _SAFE_ID_PATTERN.match(org_id):
             raise ValueError(f"Unexpected org id: {org_id!r}")
-        caches = (
+        volumes = (
             [f"ngauto-{name}-{org_id}:{path}" for name, path in BUILD_CACHE_PATHS.items()] if self.build_caches else []
         )
-        with self._open(project_dir, on_started, image=self.test_image, volumes=caches, writable=True) as session:
+        if test_data_dir is not None and test_data_dir.is_dir():
+            volumes.append(f"{test_data_dir.resolve()}:{SANDBOX_TEST_DATA_DIR}:ro")
+        with self._open(project_dir, on_started, image=self.test_image, volumes=volumes, writable=True) as session:
             yield session
 
     @contextmanager
@@ -272,6 +291,22 @@ class SandboxService:
             if port.isdigit() and 0 < int(port) < 65536:
                 return int(port)
         return None
+
+    def write_back_run_changes(self, run: "RunModel") -> int:
+        """Bring what a completed run's agents kept (generated tests, the healer's fixes) into the project's
+        editable copy, so the user sees them in the editor. Returns how many files were applied."""
+        outputs = run.outputs
+        paths = [change.path for change in outputs.generation.files] if outputs.generation else []
+        # The healer's changes only when they helped (a failed heal must not damage the user's project).
+        heals_kept = outputs.test_report is None or outputs.test_report.changes_kept is not False
+        for attempt in outputs.test_attempts or []:
+            if attempt.heal is not None and heals_kept:
+                paths.extend(change.path for change in attempt.heal.changes)
+        if not paths:
+            return 0
+        applied = self.storage.apply_run_changes(run.project_id, self._run_dir(run.id) / "project", paths)
+        logger.info("Run %s: %d changed file(s) written back to project %s", run.id, applied, run.project_id)
+        return applied
 
     def remove_run_dir(self, run_id: str) -> None:
         """Delete a run's working files. Never fails: leftovers only cost disk space."""

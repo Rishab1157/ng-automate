@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     COMMAND_POLL_SECONDS: float = 1.0
     # A run paused longer than this is stopped (its timeout does not count paused time).
     MAX_PAUSE_SECONDS: int = 1800
+    # Run ownership: the server executing a run marks it and refreshes the mark every RUN_HEARTBEAT_SECONDS.
+    # Another server (or this one after a restart) takes a run over only when the mark is older than
+    # RUN_LEASE_SECONDS, i.e. its server stopped; it looks for such runs every RUN_ORPHAN_SCAN_SECONDS.
+    RUN_HEARTBEAT_SECONDS: float = 10
+    RUN_LEASE_SECONDS: float = 45
+    RUN_ORPHAN_SCAN_SECONDS: float = 30
     # The whole run (analyze, generate, tests and healing). Keep it above HEALER_TIME_BUDGET_SECONDS.
     RUN_TIMEOUT_SECONDS: int = 7200
 
@@ -80,8 +86,15 @@ class Settings(BaseSettings):
     HEALER_TIME_BUDGET_SECONDS: int = 3600
     # The same failure this many runs in a row, although the healer worked on it in between: no progress, stop.
     HEALER_SAME_FAILURE_LIMIT: int = 3
+    # Locator failures (an element not found) go to the healer too: it looks the element up on the live page and
+    # marks every locator it changes for review. False: they are reported to the user, like failed assertions.
+    HEAL_LOCATOR_FAILURES: bool = True
     GENERATOR_MAX_ITERATIONS: int = 60
+    # Time for one batch of cases (see GENERATOR_BATCH_SIZE), paused time not counted.
     GENERATOR_TIMEOUT_SECONDS: int = 1500
+    # Cases the generator gets at a time, in one conversation. A small local model given all cases at once tries to
+    # write them in one huge reply and runs out of time; a few at a time it writes steadily.
+    GENERATOR_BATCH_SIZE: int = 3
     # Times the generator is told to continue when it stops before writing any file.
     GENERATOR_NUDGES: int = 2
 
@@ -116,6 +129,7 @@ class Settings(BaseSettings):
     LLM_API_MODE: Literal["auto", "chat", "responses"] = "auto"
     LLM_NUM_CTX: int | None = None
     LLM_THINKING: bool = True
+    LLM_NATIVE_TOOL_CALLING: bool = True
 
     @property
     def MAX_PROJECT_BYTES(self) -> int:

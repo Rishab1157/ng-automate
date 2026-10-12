@@ -19,6 +19,7 @@ from app.models.runModel import RunStatus
 from app.projections.liveViewProjection import LIVE_VIEW_TICKET_PROJECTION
 from app.repositories.liveViewTicketRepository import LiveViewTicketRepository
 from app.services.runService import RunService
+from app.utils.AgentLibraries import agent_libraries_ready
 
 if TYPE_CHECKING:
     # The sandbox service pulls in the OpenHands SDK (seconds to import): the API loads it on first use only.
@@ -45,6 +46,8 @@ class LiveViewService:
         self, *, run_id: str, org_id: str, user_id: str, mode: LiveViewMode
     ) -> tuple[str, datetime]:
         """A ticket for the run's current test sandbox, and when it stops opening new connections."""
+        if self._sandbox_service is None:
+            await agent_libraries_ready()
         run = await self.run_service.get(run_id, org_id)
         container_id = run.sandbox_container_id
         if run.status != RunStatus.RUNNING or not container_id:

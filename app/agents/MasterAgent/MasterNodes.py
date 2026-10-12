@@ -210,7 +210,9 @@ class MasterNodes:
         outcome = await self._in_sandbox(
             run_id,
             bridge,
-            lambda: self.sandbox_service.open_writable(project_dir, org_id, bridge.on_started),
+            lambda: self.sandbox_service.open_writable(
+                project_dir, org_id, bridge.on_started, self.sandbox_service.test_data_dir(state["project_id"])
+            ),
             lambda session: self.generator_factory(llm_config).generate(
                 session.workspace, project_dir, data_set, fact_sheet, profile.findings, command, bridge.on_event,
                 control=agent_control(run_id),
@@ -238,7 +240,7 @@ class MasterNodes:
         await self._start_stage(state, RunStage.RUNNING_TESTS, attempt=1)
         fact_sheet = FactSheetModel.model_validate(state["fact_sheet"])
         stack = describe_stack(fact_sheet)
-        command = resolve_test_command(fact_sheet, _test_selector(state))
+        command = resolve_test_command(fact_sheet, _test_selector(state), _test_files(state))
         await self.run_service.save_outputs(run_id, test_command=command)
         llm_config = await self.model_connection_service.get_llm_config(state.get("model_connection_id"), org_id)
         project_dir = Path(state["project_dir"])
@@ -252,7 +254,10 @@ class MasterNodes:
         cancelled = False
         try:
             session = await asyncio.to_thread(
-                sandbox.enter_context, self.sandbox_service.open_writable(project_dir, org_id, bridge.on_started)
+                sandbox.enter_context,
+                self.sandbox_service.open_writable(
+                    project_dir, org_id, bridge.on_started, self.sandbox_service.test_data_dir(state["project_id"])
+                ),
             )
             while True:
                 number = len(attempts) + 1
@@ -532,13 +537,20 @@ def _test_selector(state: MasterState) -> str | None:
     return generation.get("selector")
 
 
+def _test_files(state: MasterState) -> list[str] | None:
+    """Test mode: the test files the user picked (generate mode runs what it wrote, see _test_selector)."""
+    return None if state.get("generation") else state.get("test_files")
+
+
 def _describe_generation(outcome: GenerationOutcomeModel) -> str:
-    """One timeline line, e.g. "Wrote tests for 3 cases in 2 files · 1 case left out (no locator)"."""
+    """One timeline line, e.g. "Wrote tests for 3 cases in 2 files · 2 assumed locators to check"."""
     message = (
         f"Wrote tests for {_count(len(outcome.generated_cases), 'case')} in {_count(len(outcome.files), 'file')}"
     )
+    if outcome.unverified_locators:
+        message += f" · {_count(len(outcome.unverified_locators), 'assumed locator')} to check"
     if outcome.skipped_cases:
-        message += f" · {_count(len(outcome.skipped_cases), 'case')} left out (no locator)"
+        message += f" · {_count(len(outcome.skipped_cases), 'case')} left out"
     if outcome.error:
         message += f" · {outcome.error}"
     return message
@@ -552,6 +564,7 @@ def _generation_summary(outcome: GenerationOutcomeModel) -> dict[str, Any]:
         "skipped_cases": [case.model_dump() for case in outcome.skipped_cases],
         "selector": outcome.selector,
         "reverted_files": outcome.reverted_files[:MAX_REPORTED_FILES],
+        "unverified_locators": [item.model_dump() for item in outcome.unverified_locators[:MAX_REPORTED_FILES]],
         "stopped": outcome.error is not None,
     }
 

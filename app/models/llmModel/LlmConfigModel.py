@@ -18,3 +18,6 @@ class LlmConfigModel(BaseModel):
     num_ctx: int | None = None
     # False for models without a "thinking" mode (e.g. Devstral); the SDK asks for it by default.
     thinking: bool = True
+    # False for models that write tool calls as text instead of real tool calls (e.g. qwen2.5-coder on Ollama): the
+    # SDK then describes the tools in the prompt, reads the calls from the reply and checks them like real ones.
+    native_tool_calling: bool = True

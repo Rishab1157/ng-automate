@@ -34,6 +34,7 @@ def get_default_llm_config() -> LlmConfigModel:
         api_mode=settings.LLM_API_MODE,
         num_ctx=settings.LLM_NUM_CTX,
         thinking=settings.LLM_THINKING,
+        native_tool_calling=settings.LLM_NATIVE_TOOL_CALLING,
     )
 
 
@@ -52,6 +53,7 @@ def build_llm(config: LlmConfigModel) -> "LLM":
         api_key=config.api_key,
         base_url=config.base_url,
         api_mode=config.api_mode,
+        native_tool_calling=config.native_tool_calling,
         **options,
     )
 

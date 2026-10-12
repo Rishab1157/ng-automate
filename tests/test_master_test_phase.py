@@ -31,7 +31,7 @@ from app.models.analyzerModel import FactSheetModel
 from app.models.healerModel import FileChangeModel, HealOutcomeModel
 from app.models.healMemoryModel import HealMemoryDbModel, HealMemoryModel, HealMemoryResult, memory_point_id
 from app.models.testDataModel import TestCaseSpecModel, TestDataFormat, TestDataSetModel, TestDataStatus, TestStepModel
-from app.models.testGeneratorModel import GenerationOutcomeModel, SkippedCaseModel
+from app.models.testGeneratorModel import GenerationOutcomeModel, SkippedCaseModel, UnverifiedLocatorModel
 from app.models.runModel import (
     RunEventLevel,
     RunEventType,
@@ -390,6 +390,18 @@ async def test_test_selector_reaches_the_command(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_chosen_test_files_reach_the_command(tmp_path: Path) -> None:
+    setup = _setup(tmp_path, [PASSED])
+    files = ["src/test/java/com/acme/LoginTest.java"]
+
+    await setup.nodes.test_and_heal({**_test_state(tmp_path), "test_files": files})
+
+    command = setup.runner.calls[0][2]
+    assert command == resolve_test_command(FACT_SHEET, None, files)
+    assert "-Dtest=com.acme.LoginTest" in command.command
+
+
+@pytest.mark.anyio
 async def test_project_that_cannot_run_in_the_sandbox_fails_before_starting_it(tmp_path: Path) -> None:
     uft = FACT_SHEET.model_copy(update={"automation_tools": _code_fact(["UFT"]), "build_tool": _code_fact(None),
                                         "test_frameworks": _code_fact(None), "bdd_tool": _code_fact(None)})
@@ -408,7 +420,8 @@ GENERATED = GenerationOutcomeModel(
     summary="Wrote login.feature",
     files=[FileChangeModel(path="src/test/resources/features/ngauto/login.feature", change="added", diff="+@ngauto")],
     generated_cases=["LOGIN-1"],
-    skipped_cases=[SkippedCaseModel(case_id="LOGOUT-1", reason="step 1 (click) has no locator in the test data")],
+    skipped_cases=[SkippedCaseModel(case_id="LOGOUT-1", reason="the case has no steps")],
+    unverified_locators=[UnverifiedLocatorModel(path="src/test/java/LoginSteps.java", line=7, code='By.id("go")')],
     selector="@ngauto",
 )
 TEST_DATA = TestDataSetModel(
@@ -460,9 +473,10 @@ def _generate_state(tmp_path: Path, **extra: Any) -> MasterState:
     return MasterState(**{**_test_state(tmp_path), "mode": RunMode.GENERATE.value, "test_data_id": "data-1", **extra})
 
 
-def test_generate_mode_writes_tests_before_running_them(tmp_path: Path) -> None:
+def test_generate_mode_only_writes_the_tests(tmp_path: Path) -> None:
+    # Users review and edit the generated tests first; a test run then runs and heals them.
     assert route_next(_generate_state(tmp_path)) == GENERATE_TESTS
-    assert route_next(_generate_state(tmp_path, generation=GENERATED.model_dump(mode="json"))) == TEST_AND_HEAL
+    assert route_next(_generate_state(tmp_path, generation=GENERATED.model_dump(mode="json"))) == END
 
 
 @pytest.mark.anyio
@@ -471,7 +485,7 @@ async def test_generate_run_with_a_reused_profile_skips_the_analysis(tmp_path: P
 
     await build_master_graph(nodes).ainvoke({**_ids(), "mode": RunMode.GENERATE.value, "profile_id": "profile-0"})
 
-    assert nodes.calls == [PREPARE_WORKSPACE, COLLECT_FACTS, GENERATE_TESTS, TEST_AND_HEAL]
+    assert nodes.calls == [PREPARE_WORKSPACE, COLLECT_FACTS, GENERATE_TESTS]
 
 
 def test_interrupted_generation_starts_over_on_a_fresh_copy() -> None:
@@ -497,7 +511,8 @@ async def test_generate_tests_saves_the_outcome_and_reports_it(tmp_path: Path) -
     assert runs.outputs["generation"] == GENERATED
     assert update == {"generation": GENERATED.model_dump(mode="json")}
     completed = runs.completed_event(RunStage.GENERATING_TESTS)
-    assert completed.message == "Wrote tests for 1 case in 1 file · 1 case left out (no locator)"
+    assert completed.message == "Wrote tests for 1 case in 1 file · 1 assumed locator to check · 1 case left out"
+    assert completed.data["unverified_locators"] == [{"path": "src/test/java/LoginSteps.java", "line": 7, "code": 'By.id("go")'}]
     assert completed.data["selector"] == "@ngauto"
     messages = [event.message for event in runs.events]
     assert messages.index("create login.feature") < messages.index(completed.message)

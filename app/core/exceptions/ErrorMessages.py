@@ -55,7 +55,14 @@ class ErrorMessages:
     TEST_DATA_RETRY_NOT_ALLOWED = "Only test data that failed to be read can be read again"
     TEST_DATA_READ_FAILED = "The test data could not be turned into test cases: {reason}"
     TEST_DATA_REQUIRED = "A generate run needs test_data_id: upload test data for the project first"
-    NO_RUNNABLE_TEST_CASES = "None of the test cases can be generated: every one has a step without a locator"
+    NO_RUNNABLE_TEST_CASES = "None of the test cases can be generated: none of them has any steps"
+
+    # Project files (the editor)
+    FILE_NOT_FOUND = "File not found"
+    FILE_PATH_INVALID = "Not a valid file path in the project: {path}"
+    FILE_NOT_EDITABLE = "Only text files of the project can be edited here (test data and binary files are read-only)"
+    FILE_TOO_LARGE_TO_EDIT = "The file is larger than {limit_kb} KB: too large to edit here"
+    PROJECT_BUSY = "A run is using this project: its files can be edited again when the run has finished"
 
     # Sandbox
     SANDBOX_FAILED = "The sandbox could not be started: {reason}"

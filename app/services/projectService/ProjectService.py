@@ -1,7 +1,7 @@
 """Creating and reading projects.
 
-Uploaded or fetched from Git, every project ends up the same way: an archive in storage
-(never changed afterwards) plus one document in `projects`.
+Uploaded or fetched from Git, every project ends up the same way: an archive in storage (never changed
+afterwards), the editable copy unzipped from it, plus one document in `projects`.
 """
 
 import asyncio
@@ -47,6 +47,7 @@ class ProjectService:
         with DiscardOnError(self.storage, project_id):
             path = await self.storage.save_archive(str(project_id), chunks)
             archive = await asyncio.to_thread(inspect_archive, path, self.storage.max_bytes)
+            await asyncio.to_thread(self.storage.ensure_working_copy, str(project_id))
             db_model = ProjectMapper.to_create_db_model(
                 project_id=project_id,
                 org_id=org_id,
@@ -76,6 +77,7 @@ class ProjectService:
                 self.git_fetch_service.fetch_to_archive, source, path, self.storage.max_bytes
             )
             archive = await asyncio.to_thread(inspect_archive, path, self.storage.max_bytes)
+            await asyncio.to_thread(self.storage.ensure_working_copy, str(project_id))
             db_model = ProjectMapper.to_create_db_model(
                 project_id=project_id,
                 org_id=org_id,

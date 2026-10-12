@@ -8,6 +8,7 @@ import json
 from typing import Any
 
 from app.models.analyzerModel import FactSheetModel
+from app.utils.AgentPromptRules import PLAIN_TOOL_VALUES_RULE
 
 # Where the sandbox mounts the project (read-only). The agent sees absolute paths under it.
 SANDBOX_PROJECT_DIR = "/workspace/project"
@@ -81,6 +82,7 @@ FIND OUT:
 
 HOW TO WORK:
 - Use glob to find files, grep to search inside files, and file_editor "view" to read a file (absolute paths under {project_dir}/). View large files in parts with view_range, e.g. [1, 80].
+- {plain_values}
 - Look only at what you need (build files, configs, README, a few test classes), then answer.
 - Every answer must cite evidence: files you actually read.
 - If you are not sure, use confidence "low" and add an open question. Never guess.
@@ -99,6 +101,7 @@ def build_analysis_prompt(fact_sheet: FactSheetModel) -> str:
         project_dir=SANDBOX_PROJECT_DIR,
         fact_sheet=fact_sheet.model_dump_json(),
         answer_format=_ANSWER_FORMAT,
+        plain_values=PLAIN_TOOL_VALUES_RULE,
     )
 
 

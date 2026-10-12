@@ -2,10 +2,12 @@
 
 from collections.abc import Sequence
 
+from app.agents.TestGeneratorAgent.GeneratedTestPlacement import UNVERIFIED_MARKER
 from app.models.analyzerModel import FactSheetModel
 from app.models.healerModel import HealOutcomeModel
 from app.models.healMemoryModel import HealMemoryModel, HealMemoryResult
 from app.models.testRunModel import TestCommandModel, TestRunResultModel
+from app.utils.AgentPromptRules import PLAIN_TOOL_VALUES_RULE
 
 MAX_OUTPUT_IN_PROMPT = 6000
 MAX_PREVIOUS_SUMMARY_CHARS = 300
@@ -40,13 +42,23 @@ configuration, install or upgrade dependencies, download tools, drivers or brows
 try another one.
 
 Rules (a change that breaks them is rolled back automatically):
-- Fix only technical problems: dependencies and versions, build configuration, imports, syntax, tools and drivers.
+- Fix only technical problems: dependencies and versions, build configuration, imports, syntax, tools and drivers,
+  locators that do not find their element, and errors thrown by the test code itself.
+- Test code that throws an error (a wrong key or argument, a missing method, a null value, a bad cast): fix the
+  test code so it does what its test case describes, reusing the project's existing helpers, page objects and
+  locator keys. Never change what a test checks.
+- A locator that does not find its element: look the element up in the project's page objects or on the live
+  page (`ngauto-find-elements <page URL>` lists the page's elements with locators checked on the live page).
+  Change only the locator, never the action or the assertion, and end the line with the comment
+  {marker}: locator changed by the healer (// in Java/JS/TS, # in Python and Robot).
 - NEVER delete, skip or disable tests; NEVER remove, weaken or comment out assertions or verification steps;
   NEVER wrap failing code in try/except or empty catch blocks.
 - Do not try to fix failing assertions or application behaviour: that is not your job.
 - Keep the project's style and versions where possible.
 - Change project files only with the file_editor tool (view, then str_replace). Do not edit them with sed, echo or
   other shell commands, do not create backup copies, and do not run git.
+- Put downloads and temporary files outside the project (for example in /tmp), never in /workspace/project.
+- {plain_values}
 - You may run the test command (or a quicker build step such as `mvn -q -DskipTests compile`) to check your fix.
   As soon as the command gets past this error, stop and reply.
 
@@ -76,6 +88,8 @@ def build_heal_prompt(
         previous=_previous(previous),
         memories=_memories(memories),
         blocked=BLOCKED_MARKER,
+        marker=UNVERIFIED_MARKER,
+        plain_values=PLAIN_TOOL_VALUES_RULE,
     )
 
 

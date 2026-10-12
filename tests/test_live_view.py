@@ -10,7 +10,7 @@ import threading
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 import pytest
 from bson import ObjectId
@@ -90,7 +90,11 @@ def test_ticket_opens_the_run_s_test_sandbox(
     url = urlsplit(body["viewer_url"])
     ticket = _ticket(body["viewer_url"])
     assert url.path == f"/tx-agents/ng-automate/live/{ticket}/vnc.html"
-    assert parse_qs(url.query)["path"] == [f"tx-agents/ng-automate/live/{ticket}/websockify"]
+    # noVNC (1.6, the sandbox's) opens its WebSocket at new URL(path, location.href): relative to the viewer page.
+    [path] = parse_qs(url.query)["path"]
+    assert urljoin(f"http://127.0.0.1:4207{url.path}", path) == (
+        f"http://127.0.0.1:4207/tx-agents/ng-automate/live/{ticket}/websockify"
+    )
     assert fake.tokens == [(CONTAINER_ID, True)]
     # Only a hash of the ticket is stored, and the VNC token never reaches the browser.
     doc = mongo[settings.MONGO_DATABASE].live_view_tickets.find_one()

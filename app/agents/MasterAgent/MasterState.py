@@ -16,6 +16,7 @@ class MasterState(TypedDict, total=False):
     model_connection_id: str | None
     mode: str  # RunMode value
     test_selector: str | None
+    test_files: list[str] | None
     test_data_id: str | None
     run_scope: str  # RunScope value
     # Host folder with this run's copy of the project. Internal: never sent to the API, the events or the LLM.
@@ -48,6 +49,7 @@ def initial_state(run: RunModel) -> MasterState:
         model_connection_id=run.model_connection_id,
         mode=run.mode.value,
         test_selector=run.test_selector,
+        test_files=run.test_files,
         test_data_id=run.test_data_id,
         run_scope=run.run_scope.value,
     )

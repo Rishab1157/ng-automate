@@ -327,6 +327,58 @@ async def test_find_unfinished_returns_queued_and_running_oldest_first(app_db: M
     assert [run.id for run in await service.find_unfinished()] == [queued, running]
 
 
+# ---------- one server per run ----------
+
+
+@pytest.mark.anyio
+async def test_only_one_live_server_can_claim_a_run(app_db: MongoClient, org_id: str) -> None:
+    service = RunService()
+    run_id = await _new_run(app_db, org_id, service)
+    stale_before = datetime.now(UTC) - timedelta(seconds=45)
+
+    first, second = await asyncio.gather(
+        service.claim(run_id, "server-a", stale_before), service.claim(run_id, "server-b", stale_before)
+    )
+
+    assert sorted([first, second]) == [False, True]  # atomic: never both
+    owner = "server-a" if first else "server-b"
+    assert (await service.get_by_id(run_id)).owner == owner
+    assert await service.claim(run_id, owner, stale_before)  # the owner may claim again
+    assert await service.find_resumable(stale_before) == []  # a live run is nobody else's to resume
+
+
+@pytest.mark.anyio
+async def test_a_stale_run_can_be_taken_over_and_a_released_one_at_once(app_db: MongoClient, org_id: str) -> None:
+    service = RunService()
+    run_id = await _new_run(app_db, org_id, service)
+    await service.claim(run_id, "server-a", datetime.now(UTC) - timedelta(seconds=45))
+
+    assert not await service.claim(run_id, "server-b", datetime.now(UTC) - timedelta(seconds=45))
+    # Later: server-a stopped sending heartbeats.
+    later = datetime.now(UTC) + timedelta(seconds=1)
+    assert [run.id for run in await service.find_resumable(later)] == [run_id]
+    assert await service.claim(run_id, "server-b", later)
+
+    await service.heartbeat("server-a", [run_id])  # the old owner cannot refresh a run it lost
+    await service.release("server-a", [run_id])  # nor hand it back
+    assert (await service.get_by_id(run_id)).owner == "server-b"
+
+    await service.release("server-b", [run_id])  # a clean shutdown: free at once
+    released = await service.get_by_id(run_id)
+    assert (released.owner, released.heartbeat_at) == (None, None)
+    assert await service.claim(run_id, "server-c", datetime.now(UTC) - timedelta(seconds=45))
+
+
+@pytest.mark.anyio
+async def test_finished_runs_are_never_claimed(app_db: MongoClient, org_id: str) -> None:
+    service = RunService()
+    run_id = await _new_run(app_db, org_id, service)
+    await service.mark_completed(run_id)
+
+    assert not await service.claim(run_id, "server-a", datetime.now(UTC))
+    assert await service.find_resumable(datetime.now(UTC)) == []
+
+
 # ---------- state changes ----------
 
 @pytest.mark.anyio

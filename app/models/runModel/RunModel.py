@@ -23,7 +23,7 @@ class RunMode(str, Enum):
 
     ANALYZE = "analyze"  # profile only
     TEST = "test"  # also run the project's tests, and let the healer fix build/dependency/environment failures
-    GENERATE = "generate"  # write new tests from uploaded test data, then run and heal just those
+    GENERATE = "generate"  # only write new tests from uploaded test data (a test run runs them)
 
 
 class RunScope(str, Enum):
@@ -120,6 +120,9 @@ class TestReportModel(BaseModel):
     skipped: int
     # Every file the healer changed and kept, over all its attempts.
     changed_files: list[str] = Field(default_factory=list)
+    # Whether those changes go into the project's files: only when the tests got no worse after them (see
+    # HealLoopPolicy.heal_changes_helped). None: the healer changed nothing (or a run from before this rule).
+    changes_kept: bool | None = None
 
 
 class RunOutputsModel(BaseModel):
@@ -149,6 +152,8 @@ class RunModel(BaseModel):
     mode: RunMode = RunMode.ANALYZE
     # Test mode: which tests to run (a test class/method, or tags for Cucumber/pytest/Playwright).
     test_selector: str | None = None
+    # Test mode: or the test files the user picked (project-relative paths).
+    test_files: list[str] | None = None
     # Generate mode: the uploaded test data to write tests from, and which tests run afterwards.
     test_data_id: str | None = None
     run_scope: RunScope = RunScope.GENERATED
@@ -157,6 +162,9 @@ class RunModel(BaseModel):
     outputs: RunOutputsModel = Field(default_factory=RunOutputsModel)
     # Container of the stage running right now, so a crashed server can stop it on restart.
     sandbox_container_id: str | None = None
+    # The server executing the run, and its last sign of life (internal: never sent to clients).
+    owner: str | None = None
+    heartbeat_at: datetime | None = None
     error: RunErrorModel | None = None
     created_at: datetime
     updated_at: datetime

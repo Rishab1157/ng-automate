@@ -2,7 +2,8 @@
 
 The healer is agent-driven: it decides how to fix a failure. This code only decides when to stop. After a test run:
 - the tests passed -> stop;
-- the failure is not the healer's job (assertions, locators, no tests) -> stop, for the user;
+- the failure is not the healer's job (failed checks, no tests; locators when HEAL_LOCATOR_FAILURES is off) -> stop,
+  for the user;
 - no progress: the same failure came back HEALER_SAME_FAILURE_LIMIT runs in a row, or the healer's edits brought
   the project back to files that were already tested and failed the same way -> stop;
 - otherwise the healer gets another turn, told what its earlier fixes did.
@@ -85,12 +86,27 @@ def heal_count(attempts: list[TestAttemptModel]) -> int:
     return sum(1 for attempt in attempts if attempt.heal is not None)
 
 
+def heal_changes_helped(attempts: list[TestAttemptModel]) -> bool:
+    """Whether the healer's changes may go into the project: the tests ran again after the last heal and are no worse
+    than before the first one (they passed, or at least as many tests passed). Changes that were never checked by a
+    run, or after which the tests no longer ran or fewer passed, would only damage the user's project."""
+    if not attempts or attempts[-1].heal is not None:
+        return False  # the loop stopped right after a heal: nothing checked its changes
+    first, last = attempts[0].result, attempts[-1].result
+    if last.classification.kind == FailureKind.PASSED:
+        return True
+    return last.total > 0 and last.passed >= first.passed
+
+
+CHANGES_NOT_KEPT = "the healer's changes were not kept: the tests did not get better with them"
+
 _KIND_TEXT: dict[FailureKind, str] = {
     FailureKind.BUILD_FAILURE: "build error",
     FailureKind.DEPENDENCY_FAILURE: "dependency problem",
     FailureKind.ENVIRONMENT_FAILURE: "environment problem",
     FailureKind.LOCATOR_FAILURE: "elements were not found on the page: check the locators and the test data",
     FailureKind.TEST_FAILURE: "some tests failed their checks: review the failures",
+    FailureKind.TEST_CODE_FAILURE: "the test code itself failed with errors",
     FailureKind.NO_TESTS: "no tests were run: check the test selector and the test setup",
     FailureKind.UNKNOWN: "the tests failed for a reason NG Automate could not classify",
 }
@@ -98,6 +114,11 @@ _KIND_TEXT: dict[FailureKind, str] = {
 
 def describe_test_report(report: TestReportModel) -> str:
     """One line for the timeline and the run summary, e.g. "All 12 tests passed after 1 fix by the healer"."""
+    text = _describe_outcome(report)
+    return f"{text} · {CHANGES_NOT_KEPT}" if report.changes_kept is False else text
+
+
+def _describe_outcome(report: TestReportModel) -> str:
     fixes = f"{report.heals} fix" if report.heals == 1 else f"{report.heals} fixes"
     kind = _KIND_TEXT.get(report.outcome, report.outcome.value)
     if report.stop_reason == TestStopReason.PASSED:
@@ -121,6 +142,7 @@ def build_test_report(
     last = attempts[-1].result
     changed = sorted({change.path for attempt in attempts if attempt.heal for change in attempt.heal.changes})
     return TestReportModel(
+        changes_kept=heal_changes_helped(attempts) if changed else None,
         outcome=last.classification.kind,
         stop_reason=reason,
         detail=detail,

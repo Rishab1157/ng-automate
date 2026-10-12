@@ -17,6 +17,10 @@ async def ensure_indexes() -> None:
     await RunRepository().collection.create_index(
         [("org_id", ASCENDING), ("created_at", DESCENDING)], name="org_id_created_at"
     )
+    # A project's runs, newest first (the UI's steps).
+    await RunRepository().collection.create_index(
+        [("org_id", ASCENDING), ("project_id", ASCENDING), ("created_at", DESCENDING)], name="org_id_project_id_created_at"
+    )
     # Startup looks up unfinished runs to resume them.
     await RunRepository().collection.create_index([("status", ASCENDING)], name="status")
     # Events are read in order; (run_id, seq) also guarantees no duplicate sequence numbers.

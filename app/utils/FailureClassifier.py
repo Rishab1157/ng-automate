@@ -1,4 +1,5 @@
-"""Decide who handles a test run's outcome: the healer (technical failures) or the user (everything else).
+"""Decide who handles a test run's outcome: the healer (technical failures, and locators that do not match the page
+unless HEAL_LOCATOR_FAILURES is off) or the user (everything else).
 
 Build output and test messages come from the project under test: they are untrusted and can be huge. Only the
 tail of the output is scanned, and every pattern is a plain alternation without nested quantifiers (no
@@ -7,6 +8,7 @@ catastrophic backtracking).
 
 import re
 
+from app.config import settings
 from app.models.testRunModel import (
     HEALABLE_KINDS,
     FailureClassificationModel,
@@ -17,7 +19,9 @@ from app.models.testRunModel import (
 
 MAX_SCANNED_CHARS = 200_000
 MAX_EVIDENCE = 5
-MAX_EVIDENCE_CHARS = 300
+MAX_EVIDENCE_CHARS = 400
+# Stack frames kept with an error thrown by the test code: where it was thrown.
+MAX_STACK_FRAMES = 3
 
 # Output patterns, checked in this order: the first kind with a matching line wins.
 OUTPUT_PATTERNS: list[tuple[FailureKind, re.Pattern[str]]] = [
@@ -53,6 +57,16 @@ LOCATOR_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# The first line of a failing test's error that names a programming error in the test code itself (not a check on the
+# application): a wrong key or argument, null, a bad cast, a missing method or class.
+CODE_ERROR_PATTERN = re.compile(
+    r"\b(?:IllegalArgumentException|IllegalStateException|NullPointerException|ClassCastException"
+    r"|NumberFormatException|(?:ArrayIndex|StringIndex|Index)OutOfBoundsException|UnsupportedOperationException"
+    r"|NoSuchMethodError|NoSuchFieldError|NoClassDefFoundError|ClassNotFoundException|ExceptionInInitializerError"
+    r"|AttributeError|NameError|UnboundLocalError|TypeError|KeyError|IndexError|ReferenceError)\b"
+    r"|is not a function|Cannot read propert(?:y|ies) of (?:undefined|null)|fixture '[^']{1,100}' not found",
+)
+
 NO_TESTS_PATTERN = re.compile(
     r"No tests to run|Tests run: 0,|collected 0 items|no tests ran|No tests found|0 passing",
     re.IGNORECASE,
@@ -64,7 +78,8 @@ _REASONS = {
     FailureKind.DEPENDENCY_FAILURE: "A dependency is missing or could not be resolved.",
     FailureKind.BUILD_FAILURE: "The project does not compile.",
     FailureKind.ENVIRONMENT_FAILURE: "A browser, driver, JDK or tool is missing or does not match.",
-    FailureKind.LOCATOR_FAILURE: "Tests could not find page elements: check the locators in the test data.",
+    FailureKind.LOCATOR_FAILURE: "Tests could not find page elements: a locator does not match the page.",
+    FailureKind.TEST_CODE_FAILURE: "Tests failed with errors in the test code itself (for example a wrong key or a null value).",
     FailureKind.TEST_FAILURE: "Tests ran and failed: assertions or the application's behaviour.",
     FailureKind.UNKNOWN: "The test command failed for an unknown reason.",
 }
@@ -88,8 +103,18 @@ def classify_failure(exit_code: int, output: str, cases: list[TestCaseResultMode
 
     if failing:
         messages = [f"{case.name}: {case.message or case.details or ''}" for case in failing]
-        locator = [m for m in messages if LOCATOR_PATTERN.search(m)]
-        if len(locator) * 2 > len(messages):
+        locator: list[str] = []
+        code: list[str] = []
+        for case, message in zip(failing, messages, strict=True):
+            error = _code_error(case)
+            if LOCATOR_PATTERN.search(message):
+                locator.append(message)
+            elif error:
+                code.append(f"{case.name}: {error}")
+        # Mostly technical problems in the tests (not checks that failed): the larger kind decides.
+        if (len(locator) + len(code)) * 2 > len(messages):
+            if len(code) > len(locator):
+                return _result(FailureKind.TEST_CODE_FAILURE, code)
             return _result(FailureKind.LOCATOR_FAILURE, locator)
         return _result(FailureKind.TEST_FAILURE, messages)
 
@@ -98,10 +123,25 @@ def classify_failure(exit_code: int, output: str, cases: list[TestCaseResultMode
     return _result(FailureKind.UNKNOWN, tail.strip().splitlines()[-3:])
 
 
+def _code_error(case: TestCaseResultModel) -> str | None:
+    """The error line when a failing test threw a programming error (checked on the first line of the message and of
+    the stack trace, where the exception's type is), else None. The first stack frames are added: they point at the
+    code that threw, e.g. "(at framework.Config.locator(Config.java:31) < at framework.BaseTest.byLocator(...))"."""
+    for text in (case.message, case.details):
+        first = (text or "").strip().splitlines()[0] if (text or "").strip() else ""
+        if first and CODE_ERROR_PATTERN.search(first) and "AssertionError" not in first:
+            frames = [
+                line.strip() for line in (case.details or "").splitlines()[1:]
+                if line.strip().startswith(("at ", 'File "'))
+            ][:MAX_STACK_FRAMES]
+            return f"{first} ({' < '.join(frames)})" if frames else first
+    return None
+
+
 def _result(kind: FailureKind, evidence: list[str] | None = None) -> FailureClassificationModel:
     return FailureClassificationModel(
         kind=kind,
-        healable=kind in HEALABLE_KINDS,
+        healable=kind in HEALABLE_KINDS or (kind == FailureKind.LOCATOR_FAILURE and settings.HEAL_LOCATOR_FAILURES),
         reason=_REASONS[kind],
         evidence=[_clip(line.strip()) for line in (evidence or [])[:MAX_EVIDENCE]],
     )

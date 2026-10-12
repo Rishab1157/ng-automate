@@ -77,6 +77,9 @@ def read_test_data(content: bytes, filename: str) -> TestDataSetModel | FreeForm
         return _build(_csv_cases(text), TestDataFormat.CSV)
     if extension == "json":
         data = _load_json(text)
+        txgenie = _txgenie_cases(data)
+        if txgenie is not None:
+            return txgenie
         raw_cases = _own_format_cases(data)
         if raw_cases is not None:
             return _build(raw_cases, TestDataFormat.JSON)
@@ -134,6 +137,80 @@ def _load_json(text: str) -> Any:
         return json.loads(text)
     except json.JSONDecodeError as error:
         raise ValidationError(INVALID_JSON.format(reason=f"line {error.lineno}, column {error.colno}: {error.msg}")) from None
+
+
+def _txgenie_cases(data: Any) -> TestDataSetModel | None:
+    """TXGENIE's generated test cases (steps with action / test_data / expected_result), else None.
+
+    Their steps are sentences ("Click the Login button"), not our action words, so they are kept as written: the
+    test generator reads them as they are. Nothing is guessed and no LLM is needed.
+    """
+    raw_cases = (data.get("test_cases") or data.get("testcases")) if isinstance(data, dict) else data
+    if not isinstance(raw_cases, list) or not raw_cases or not all(isinstance(case, dict) for case in raw_cases):
+        return None
+    if not any(
+        isinstance(step, dict) and ("expected_result" in step or "test_data" in step)
+        for case in raw_cases
+        for step in case.get("steps") or []
+    ):
+        return None
+    if len(raw_cases) > MAX_CASES:
+        raise ValidationError(TOO_MANY_CASES)
+    cases: list[TestCaseSpecModel] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(raw_cases, start=1):
+        case = _txgenie_case(raw, index)
+        if case.id in seen:
+            raise ValidationError(DUPLICATE_CASE.format(case=case.id))
+        seen.add(case.id)
+        cases.append(case)
+    return TestDataSetModel(source_format=TestDataFormat.JSON, cases=cases, warnings=[])
+
+
+def _txgenie_case(raw: dict[str, Any], index: int) -> TestCaseSpecModel:
+    case_id = _text(raw.get("id")) or f"TC-{index}"
+    raw_steps = [step for step in raw.get("steps") or [] if isinstance(step, dict) and _text(step.get("action"))]
+    if not raw_steps:
+        raise ValidationError(CASE_FIELD_REQUIRED.format(case=case_id, field="steps"))
+    if len(raw_steps) > MAX_STEPS_PER_CASE:
+        raise ValidationError(TOO_MANY_STEPS.format(case=case_id))
+    raw_steps.sort(key=lambda step: step.get("step_number") if isinstance(step.get("step_number"), int) else 0)
+    steps = [
+        TestStepModel(
+            action=_text(step.get("action")),
+            value=_free_text(step.get("test_data")) or None,
+            expected=_free_text(step.get("expected_result")) or None,
+            text=_text(step.get("action")),
+        )
+        for step in raw_steps
+    ]
+    preconditions = raw.get("preconditions")
+    if isinstance(preconditions, str):
+        preconditions = [line.strip(" -•\t") for line in preconditions.splitlines()]
+    case_data = raw.get("test_data")
+    test_data = (
+        {str(key): _free_text(value) for key, value in case_data.items()}
+        if isinstance(case_data, dict)
+        else ({"data": _free_text(case_data)} if _free_text(case_data) else {})
+    )
+    labels = [raw.get(field) for field in ("priority", "test_type", "module", "business_area")]
+    tags = [_text(tag) for tag in [*labels, *(raw.get("tags") or [])] if _text(tag)]
+    return TestCaseSpecModel(
+        id=case_id,
+        title=_text(raw.get("title")) or f"Test case {index}",
+        description=_text(raw.get("description")) or None,
+        preconditions=[_text(item) for item in preconditions or [] if _text(item)],
+        steps=steps,
+        test_data=test_data,
+        tags=list(dict.fromkeys(tags)),
+    )
+
+
+def _free_text(value: Any) -> str:
+    """Test data or an expected result as text: TXGENIE sometimes sends objects or lists there."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False) if value else ""
+    return _text(value)
 
 
 def _own_format_cases(data: Any) -> list[Any] | None:

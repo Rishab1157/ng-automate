@@ -355,6 +355,7 @@ def test_initial_state_holds_the_ids_and_every_saved_output() -> None:
         "model_connection_id": run.model_connection_id,
         "mode": "analyze",
         "test_selector": None,
+        "test_files": None,
         "test_data_id": None,
         "run_scope": "generated",
         "project_dir": "/data/runs/x/project",
@@ -441,6 +442,7 @@ class FakeSandbox:
         self.cleaned_up = threading.Event()
         self.stopped: list[str] = []
         self.removed: list[str] = []
+        self.written_back: list[str] = []
         self.writable_org: str | None = None
 
     def prepare_project_dir(self, project_id: str, run_id: str) -> Path:
@@ -448,11 +450,20 @@ class FakeSandbox:
         _write_cited_files(folder)
         return folder
 
+    def write_back_run_changes(self, run: Any) -> int:
+        self.written_back.append(run.id)
+        return 0
+
+    def test_data_dir(self, project_id: str) -> Path:
+        return self.workdir / "projects" / project_id / "test-data"
+
     @contextmanager
     def open_writable(
-        self, project_dir: Path, org_id: str, on_started: Callable[[str], None] | None = None
+        self, project_dir: Path, org_id: str, on_started: Callable[[str], None] | None = None,
+        test_data_dir: Path | None = None,
     ) -> Iterator[FakeSession]:
         self.writable_org = org_id
+        self.test_data_dir_used = test_data_dir
         with self.open_readonly(project_dir, on_started) as session:
             yield session
 

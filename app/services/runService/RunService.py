@@ -4,17 +4,26 @@ The run document is the only record of how far a run got. Every stage saves its 
 interrupted by a restart resumes at the first stage that has no output yet.
 """
 
+import asyncio
 import logging
 import math
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import Enum
+from functools import partial
 from typing import Any
 
 from bson import ObjectId
-from pymongo import ASCENDING
+from pymongo import ASCENDING, DESCENDING
 
-from app.agents.RunnerAgent.TestCommandResolver import check_test_selector
+from app.agents.RunnerAgent.TestCommandResolver import (
+    NOT_A_TEST_FILE,
+    SELECTOR_AND_FILES,
+    check_test_files,
+    check_test_selector,
+    is_test_file,
+    read_small_text,
+)
 from app.agents.TestGeneratorAgent.GeneratedTestPlacement import runnable_cases
 from app.core.exceptions import ErrorCode, ErrorMessages, NotFoundError, ValidationError
 from app.models.analyzerModel import AnalyzerFindingsModel, FactSheetModel
@@ -98,6 +107,7 @@ class RunService:
         model_connection_id: str | None,
         mode: RunMode = RunMode.ANALYZE,
         test_selector: str | None = None,
+        test_files: list[str] | None = None,
         test_data_id: str | None = None,
         run_scope: RunScope = RunScope.GENERATED,
     ) -> RunModel:
@@ -110,6 +120,11 @@ class RunService:
         connection_id = connection_id_or_none(model_connection_id)
         # Fail now (400/404) rather than minutes later inside the run.
         selector = check_test_selector(test_selector) if mode == RunMode.TEST else None
+        files = check_test_files(test_files) if mode == RunMode.TEST else None
+        if selector and files:
+            raise ValidationError(SELECTOR_AND_FILES)
+        if files:
+            await asyncio.to_thread(self._check_test_files_exist, project.id, files)
         if mode == RunMode.GENERATE:
             if not test_data_id:
                 raise ValidationError(ErrorMessages.TEST_DATA_REQUIRED)
@@ -136,6 +151,7 @@ class RunService:
             model_connection_id=connection_id,
             mode=mode,
             test_selector=selector,
+            test_files=files,
             test_data_id=test_data_id,
             run_scope=run_scope,
             outputs=outputs,
@@ -164,6 +180,78 @@ class RunService:
             limit=min(max(limit, 1), MAX_EVENTS_LIMIT),
         )
         return [RunMapper.to_event_model(doc) for doc in docs]
+
+    async def claim(self, run_id: str, owner: str, stale_before: datetime) -> bool:
+        """Take the run for `owner` unless another live server has it (atomic). Live means a heartbeat newer than
+        `stale_before`; a run with no owner, our own, or a stale one can be taken. False: someone else runs it."""
+        doc = await self.run_repo.find_one_and_update(
+            {
+                "_id": ObjectId(run_id),
+                "status": {"$in": _UNFINISHED_STATUSES},
+                "$or": [
+                    {"owner": None},
+                    {"owner": owner},
+                    {"heartbeat_at": None},
+                    {"heartbeat_at": {"$lt": stale_before}},
+                ],
+            },
+            {"$set": {"owner": owner, "heartbeat_at": datetime.now(UTC)}},
+            projection={"_id": 1},
+        )
+        return doc is not None
+
+    async def heartbeat(self, owner: str, run_ids: list[str]) -> None:
+        """`owner` is still executing these runs."""
+        if run_ids:
+            await self.run_repo.update_many(
+                {"_id": {"$in": [ObjectId(run_id) for run_id in run_ids]}, "owner": owner},
+                {"$set": {"heartbeat_at": datetime.now(UTC)}},
+            )
+
+    async def release(self, owner: str, run_ids: list[str]) -> None:
+        """`owner` stops executing these unfinished runs (shutdown): the next server takes them over at once."""
+        if run_ids:
+            await self.run_repo.update_many(
+                {
+                    "_id": {"$in": [ObjectId(run_id) for run_id in run_ids]},
+                    "owner": owner,
+                    "status": {"$in": _UNFINISHED_STATUSES},
+                },
+                {"$set": {"owner": None, "heartbeat_at": None}},
+            )
+
+    async def find_resumable(self, stale_before: datetime) -> list[RunModel]:
+        """Unfinished runs no live server is executing (no owner, or a heartbeat older than `stale_before`)."""
+        docs = await self.run_repo.find(
+            {
+                "status": {"$in": _UNFINISHED_STATUSES},
+                "$or": [{"owner": None}, {"heartbeat_at": None}, {"heartbeat_at": {"$lt": stale_before}}],
+            },
+            RUN_DETAIL_PROJECTION,
+            sort=[("created_at", ASCENDING), ("_id", ASCENDING)],
+        )
+        return [RunMapper.to_model(doc) for doc in docs]
+
+    async def list_for_project(
+        self, project_id: str, org_id: str, mode: RunMode | None = None, limit: int = 20
+    ) -> list[RunModel]:
+        """The project's runs, newest first (optionally of one mode)."""
+        project = await self.project_service.get(project_id, org_id)
+        query: dict[str, Any] = {"org_id": ObjectId(org_id), "project_id": ObjectId(project.id)}
+        if mode is not None:
+            query["mode"] = mode.value
+        docs = await self.run_repo.find(
+            query, RUN_DETAIL_PROJECTION, sort=[("created_at", DESCENDING), ("_id", DESCENDING)], limit=limit
+        )
+        return [RunMapper.to_model(doc) for doc in docs]
+
+    async def has_active_run(self, project_id: str, org_id: str) -> bool:
+        """A queued or running run uses the project: its files must not change under the agents."""
+        doc = await self.run_repo.find_one(
+            {"project_id": ObjectId(project_id), "org_id": ObjectId(org_id), "status": {"$in": _UNFINISHED_STATUSES}},
+            {"_id": 1},
+        )
+        return doc is not None
 
     async def find_unfinished(self) -> list[RunModel]:
         """Queued or running runs, oldest first: what a restarted server must resume."""
@@ -260,6 +348,14 @@ class RunService:
             return (await self.profile_service.get_latest(project_id, org_id)).id
         except NotFoundError:
             return None
+
+    def _check_test_files_exist(self, project_id: str, files: list[str]) -> None:
+        """Every chosen file is a test file of the project's editable copy (runs start from that copy)."""
+        working = self.project_service.storage.ensure_working_copy(project_id)
+        for path in files:
+            target = working / path
+            if not target.is_file() or not is_test_file(path, partial(read_small_text, target)):
+                raise ValidationError(NOT_A_TEST_FILE.format(path=path))
 
     async def _find_run(self, run_id: str, scope: dict[str, Any], projection: dict[str, Any]) -> dict[str, Any]:
         if not ObjectId.is_valid(run_id):

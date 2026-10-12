@@ -46,7 +46,8 @@ def route_next(state: MasterState) -> str:
         next_stage = ANALYZE
     elif state.get("mode") == RunMode.GENERATE.value and not state.get("generation"):
         next_stage = GENERATE_TESTS
-    elif state.get("mode") in (RunMode.TEST.value, RunMode.GENERATE.value) and not state.get("test_report"):
+    elif state.get("mode") == RunMode.TEST.value and not state.get("test_report"):
+        # A generate run only writes the tests (users review and edit them first); a test run runs and heals them.
         next_stage = TEST_AND_HEAL
     else:
         return END

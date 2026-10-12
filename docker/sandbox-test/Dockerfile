@@ -36,6 +36,22 @@ RUN mkdir -p /home/openhands/.m2 /home/openhands/.npm /home/openhands/.cache/pip
 # The X server runs as the sandbox user, so its socket folder must already exist, world-writable and sticky.
 RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 
+# Chrome for the projects' tests. Inside the container Chrome's own sandbox cannot start ("Chrome instance exited"),
+# so every start gets --no-sandbox: Debian's chromium launcher reads its flags from /etc/chromium.d (the container is
+# the isolation). Projects that look for Google Chrome (Selenium, WebDriverManager, chromedriver) find Chromium under
+# its usual names, so their own code and drivers need no change.
+RUN printf '%s\n' \
+        '# NG Automate sandbox: Chrome runs in a container, which is the isolation; its own sandbox cannot start here.' \
+        'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox"' \
+        > /etc/chromium.d/ngauto-container \
+    && ln -sf /usr/bin/chromium /usr/bin/google-chrome \
+    && ln -sf /usr/bin/chromium /usr/bin/google-chrome-stable
+
+# The window manager's default style asks fbsetbg for a wallpaper, fbsetbg finds no wallpaper tool in the image and
+# puts an error dialog on the live view. The sandbox's screen needs no wallpaper: fbsetbg does nothing here
+# (/usr/local/bin comes before /usr/bin in PATH).
+RUN ln -sf /bin/true /usr/local/bin/fbsetbg
+
 # ngauto-find-elements: lists a page's interactive elements with locators checked unique (used to write tests).
 COPY ngauto-entrypoint.sh ngauto-find-elements /usr/local/bin/
 # A Windows checkout can turn line endings into CRLF, which bash and the #! line cannot read.

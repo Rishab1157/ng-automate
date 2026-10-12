@@ -1,3 +1,3 @@
-from .TestGeneratorModel import GenerationOutcomeModel, SkippedCaseModel
+from .TestGeneratorModel import GenerationOutcomeModel, SkippedCaseModel, UnverifiedLocatorModel
 
-__all__ = ["SkippedCaseModel", "GenerationOutcomeModel"]
+__all__ = ["SkippedCaseModel", "GenerationOutcomeModel", "UnverifiedLocatorModel"]

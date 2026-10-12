@@ -6,6 +6,7 @@ upload's model connection or, without one, the default model from .env. The user
 (PUT) before a generate run uses them. Bad files are rejected with a clear message (400) before anything is stored.
 """
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 
@@ -54,7 +55,26 @@ class TestDataService:
         """Ready at once for our own format; otherwise processing (the caller starts the processor)."""
         project = await self.project_service.get(project_id, org_id)
         source = read_test_data(content, filename)
-        common = {"org_id": org_id, "project_id": project.id, "user_id": user_id, "filename": filename[-MAX_FILENAME_CHARS:]}
+        # The original file is kept as it is, next to the project (the editor's "Test data" folder, and
+        # /workspace/test-data in the sandbox). Its stored name is unique in the project.
+        storage = self.project_service.storage
+        stored_name = await asyncio.to_thread(storage.save_test_data_file, project.id, filename, content)
+        try:
+            return await self._insert(project.id, org_id, user_id, stored_name, source, model_connection_id)
+        except BaseException:
+            await asyncio.to_thread(storage.delete_test_data_file, project.id, stored_name)
+            raise
+
+    async def _insert(
+        self,
+        project_id: str,
+        org_id: str,
+        user_id: str,
+        filename: str,
+        source: TestDataSetModel | FreeFormSource,
+        model_connection_id: str | None,
+    ) -> TestDataUploadModel:
+        common = {"org_id": org_id, "project_id": project_id, "user_id": user_id, "filename": filename[-MAX_FILENAME_CHARS:]}
         if isinstance(source, FreeFormSource):
             connection_id = connection_id_or_none(model_connection_id)
             if connection_id is not None:
@@ -68,7 +88,7 @@ class TestDataService:
         await self.test_data_repo.insert_one(db_model.model_dump(by_alias=True))
         logger.info(
             "Test data %s saved for project %s (%s, %s, %d case(s))",
-            db_model.id, project.id, db_model.source_format, db_model.status, db_model.case_count,
+            db_model.id, project_id, db_model.source_format, db_model.status, db_model.case_count,
         )
         return TestDataMapper.to_model(db_model.model_dump(by_alias=True))
 

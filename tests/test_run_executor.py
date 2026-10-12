@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +81,35 @@ class FakeRunService:
     async def find_unfinished(self) -> list[RunModel]:
         return [run for run in self.runs.values() if run.status in (RunStatus.QUEUED, RunStatus.RUNNING)]
 
+    @staticmethod
+    def _free(run: RunModel, owner: str | None, stale_before: datetime) -> bool:
+        return (
+            run.owner is None or run.owner == owner or run.heartbeat_at is None or run.heartbeat_at < stale_before
+        )
+
+    async def find_resumable(self, stale_before: datetime) -> list[RunModel]:
+        return [run for run in await self.find_unfinished() if self._free(run, None, stale_before)]
+
+    async def claim(self, run_id: str, owner: str, stale_before: datetime) -> bool:
+        run = self.runs.get(run_id)
+        if run is None or run.status not in (RunStatus.QUEUED, RunStatus.RUNNING):
+            return False
+        if not self._free(run, owner, stale_before):
+            return False
+        self._update(run_id, owner=owner, heartbeat_at=datetime.now(UTC))
+        return True
+
+    async def heartbeat(self, owner: str, run_ids: list[str]) -> None:
+        for run_id in run_ids:
+            if self.runs[run_id].owner == owner:
+                self._update(run_id, heartbeat_at=datetime.now(UTC))
+
+    async def release(self, owner: str, run_ids: list[str]) -> None:
+        for run_id in run_ids:
+            run = self.runs[run_id]
+            if run.owner == owner and run.status in (RunStatus.QUEUED, RunStatus.RUNNING):
+                self._update(run_id, owner=None, heartbeat_at=None)
+
     async def mark_running(self, run_id: str) -> None:
         self._update(run_id, status=RunStatus.RUNNING)
 
@@ -117,6 +146,11 @@ class FakeSandboxService:
         self.stop_error = stop_error
         self.stopped: list[str] = []
         self.removed: list[str] = []
+        self.written_back: list[str] = []
+
+    def write_back_run_changes(self, run: Any) -> int:
+        self.written_back.append(run.id)
+        return 0
 
     def stop_container(self, container_id: str) -> None:
         self.stopped.append(container_id)
@@ -210,11 +244,12 @@ async def test_successful_run_is_completed_and_cleaned_up() -> None:
     assert done.error is None
     assert graph.states == [
         {"run_id": run.id, "org_id": run.org_id, "project_id": run.project_id, "model_connection_id": None,
-         "mode": "analyze", "test_selector": None, "test_data_id": None,
+         "mode": "analyze", "test_selector": None, "test_files": None, "test_data_id": None,
          "run_scope": "generated"}
     ]
     assert runs.events == [(run.id, RunEventType.RUN_COMPLETED, RUN_COMPLETED_MESSAGE, {"profile_id": "profile-1"})]
     assert sandbox.stopped == []
+    assert sandbox.written_back == [run.id]  # what the agents kept goes into the project's editable copy
     assert sandbox.removed == [run.id]
 
 
@@ -237,6 +272,24 @@ async def test_test_run_reports_the_test_outcome_when_it_completes() -> None:
     assert event_type == RunEventType.RUN_COMPLETED
     assert message == "Run completed: All 3 tests passed after 1 fix by the healer"
     assert data == {"profile_id": "profile-1", "test_report": report}
+
+
+@pytest.mark.anyio
+async def test_generate_run_says_its_tests_are_saved_when_it_completes() -> None:
+    run = make_run()
+    runs = FakeRunService(run)
+
+    async def tests_written(state: dict[str, Any]) -> dict[str, Any]:
+        return {**state, "profile_id": "profile-1", "generation": {"files": [{"path": "LoginTest.java"}]}}
+
+    executor, _ = make_executor(runs, FakeGraph(tests_written))
+
+    await executor.submit(run.id)
+    await settle(executor)
+
+    [(_, event_type, message, _)] = runs.events
+    assert event_type == RunEventType.RUN_COMPLETED
+    assert message == "Run completed: the generated tests are saved in the project, ready to review and run"
 
 
 @pytest.mark.anyio
@@ -276,6 +329,7 @@ async def test_known_error_fails_the_run_with_its_code_and_message() -> None:
     assert failed.stage == RunStage.FAILED
     assert failed.error == RunErrorModel(code="SANDBOX_FAILED", message=message)
     assert runs.events == [(run.id, RunEventType.RUN_FAILED, message, {"code": "SANDBOX_FAILED"})]
+    assert sandbox.written_back == []  # a failed run's half-done work is not written back
     assert sandbox.removed == [run.id]
 
 
@@ -711,6 +765,100 @@ async def test_interrupted_run_resumes_after_its_last_saved_stage(app_db: MongoC
     ]
 
 
+# --------------------------------------------------------------------------- one server per run
+
+
+def _owned(run: RunModel, owner: str, seconds_ago: float) -> RunModel:
+    return run.model_copy(update={"owner": owner, "heartbeat_at": datetime.now(UTC) - timedelta(seconds=seconds_ago)})
+
+
+@pytest.mark.anyio
+async def test_a_run_another_live_server_executes_is_left_alone() -> None:
+    live = _owned(make_run(status=RunStatus.RUNNING, container_id="c-live"), "other-server", seconds_ago=1)
+    runs = FakeRunService(live)
+    graph = FakeGraph()
+    executor, sandbox = make_executor(runs, graph)
+
+    assert await executor.resume_interrupted() == 0
+    await executor.submit(live.id)  # even when asked directly
+    await settle(executor)
+
+    assert sandbox.stopped == []  # its container is not touched
+    assert graph.states == []
+    assert runs.runs[live.id].owner == "other-server" and runs.runs[live.id].status == RunStatus.RUNNING
+
+
+@pytest.mark.anyio
+async def test_a_run_whose_server_stopped_is_taken_over() -> None:
+    lease = settings.RUN_LEASE_SECONDS
+    orphan = _owned(make_run(status=RunStatus.RUNNING, container_id="c-old"), "crashed-server", seconds_ago=lease * 2)
+    runs = FakeRunService(orphan)
+    executor, sandbox = make_executor(runs, FakeGraph())
+
+    assert await executor.resume_interrupted() == 1
+    await settle(executor)
+
+    assert sandbox.stopped == ["c-old"]
+    assert runs.runs[orphan.id].status == RunStatus.COMPLETED
+    assert runs.runs[orphan.id].owner == executor.instance_id
+
+
+@pytest.mark.anyio
+async def test_shutdown_hands_the_runs_back_for_the_next_server() -> None:
+    release = asyncio.Event()
+    run = make_run()
+    runs = FakeRunService(run)
+
+    async def busy(state: dict[str, Any]) -> dict[str, Any]:
+        await release.wait()
+        return state
+
+    executor, _ = make_executor(runs, FakeGraph(busy))
+    await executor.submit(run.id)
+    await wait_until(lambda: runs.runs[run.id].owner == executor.instance_id)
+
+    await executor.shutdown()
+
+    assert runs.runs[run.id].status == RunStatus.RUNNING  # unfinished: it resumes
+    assert (runs.runs[run.id].owner, runs.runs[run.id].heartbeat_at) == (None, None)
+    following, _ = make_executor(runs, FakeGraph())
+    assert await following.resume_interrupted() == 1  # at once, no lease to wait for
+    await settle(following)
+    assert runs.runs[run.id].status == RunStatus.COMPLETED
+
+
+@pytest.mark.anyio
+async def test_heartbeats_keep_a_run_owned_and_the_sweep_takes_over_stale_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "RUN_HEARTBEAT_SECONDS", 0.05)
+    monkeypatch.setattr(settings, "RUN_ORPHAN_SCAN_SECONDS", 0.1)
+    release = asyncio.Event()
+    mine = make_run()
+    runs = FakeRunService(mine)
+
+    async def busy(state: dict[str, Any]) -> dict[str, Any]:
+        if state["run_id"] == mine.id:
+            await release.wait()
+        return state
+
+    executor, _ = make_executor(runs, FakeGraph(busy))
+    await executor.submit(mine.id)
+    await wait_until(lambda: runs.runs[mine.id].owner == executor.instance_id)
+    first_beat = runs.runs[mine.id].heartbeat_at
+    executor.start()
+    await wait_until(lambda: runs.runs[mine.id].heartbeat_at != first_beat)  # still alive
+
+    orphan = _owned(make_run(status=RunStatus.RUNNING), "crashed-server", seconds_ago=settings.RUN_LEASE_SECONDS * 2)
+    runs.runs[orphan.id] = orphan
+    await wait_until(lambda: runs.runs[orphan.id].status == RunStatus.COMPLETED)  # the sweep took it over
+
+    release.set()
+    await settle(executor)
+    await executor.shutdown()
+    assert runs.runs[mine.id].status == RunStatus.COMPLETED
+
+
 # --------------------------------------------------------------------------- app lifespan
 
 
@@ -725,6 +873,9 @@ class RecordingExecutor:
             raise self.resume_error
         return 2
 
+    def start(self) -> None:
+        self.calls.append("start")
+
     async def shutdown(self) -> None:
         self.calls.append("shutdown")
 
@@ -736,9 +887,9 @@ def test_app_resumes_runs_on_startup_and_stops_them_on_shutdown(
     monkeypatch.setattr(main_module, "run_executor", executor)
 
     with TestClient(main_module.app):
-        assert executor.calls == ["resume_interrupted"]
+        assert executor.calls == ["resume_interrupted", "start"]
 
-    assert executor.calls == ["resume_interrupted", "shutdown"]
+    assert executor.calls == ["resume_interrupted", "start", "shutdown"]
 
 
 def test_app_starts_even_when_resuming_fails(
@@ -750,5 +901,6 @@ def test_app_starts_even_when_resuming_fails(
     with TestClient(main_module.app) as client:
         assert client.get("/health").status_code == 200
 
-    assert executor.calls == ["resume_interrupted", "shutdown"]
+    # The sweep still starts: it takes the runs over a little later.
+    assert executor.calls == ["resume_interrupted", "start", "shutdown"]
     assert "Could not resume interrupted runs" in caplog.text

@@ -12,8 +12,9 @@ class CreateRunDTO(BaseModel):
     mode: RunMode = Field(
         RunMode.ANALYZE,
         description="analyze: build the project profile. test: also run the project's tests and let the healer fix "
-        "build, dependency and environment failures. generate: write new tests from uploaded test data, then run and "
-        "heal just those. Test and generate runs reuse the project's latest profile when it has one.",
+        "build, dependency and environment failures. generate: only write new tests from uploaded test data (they are "
+        "saved to the project for review; run them with a test run and their test_files). Test and generate runs "
+        "reuse the project's latest profile when it has one.",
     )
     test_selector: str | None = Field(
         None,
@@ -21,14 +22,19 @@ class CreateRunDTO(BaseModel):
         description="Test mode only: which tests to run, e.g. a test class (LoginTest), a pytest path or a tag "
         "expression (@smoke). Leave empty to run all tests.",
     )
+    test_files: list[str] | None = Field(
+        None,
+        max_length=200,
+        description="Test mode only, instead of test_selector: the test files to run, as project-relative paths "
+        "from the file tree (its is_test files), e.g. src/test/java/com/acme/LoginTest.java or a .feature file.",
+    )
 
     test_data_id: str | None = Field(
         None, description="Generate mode only: the test data to write tests from (POST /project/{id}/test-data)."
     )
     run_scope: RunScope = Field(
         RunScope.GENERATED,
-        description="Generate mode only: generated = run only the tests written from the test data; "
-        "all = run the project's whole suite.",
+        description="No longer used: a generate run only writes the tests. Kept so older clients still work.",
     )
 
     _validate_project_id = object_id_validator("project_id")

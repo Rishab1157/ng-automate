@@ -65,8 +65,9 @@ async def create_live_view(
     ticket, expires_at = await live_view_service.create_ticket(
         run_id=run_id, org_id=org_id, user_id=current_user.user_id, mode=mode
     )
-    socket_path = f"{VIEWER_PREFIX.lstrip('/')}/{ticket}/websockify"
-    viewer_url = f"{VIEWER_PREFIX}/{ticket}/vnc.html?path={socket_path}&autoconnect=1&resize=scale&reconnect=1"
+    # noVNC resolves `path` against the viewer page's own URL (new URL(path, location.href)): "websockify" is the
+    # socket next to vnc.html, under whatever prefix a proxy serves the page at.
+    viewer_url = f"{VIEWER_PREFIX}/{ticket}/vnc.html?path=websockify&autoconnect=1&resize=scale&reconnect=1"
     if mode == LiveViewMode.VIEW:
         viewer_url += "&view_only=1"
     return LiveViewResponseDTO(viewer_url=viewer_url, mode=mode, expires_at=expires_at)

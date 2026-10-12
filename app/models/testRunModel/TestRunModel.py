@@ -29,13 +29,16 @@ class FailureKind(str, Enum):
     BUILD_FAILURE = "build_failure"  # compile/syntax errors -> healer
     DEPENDENCY_FAILURE = "dependency_failure"  # unresolved/missing packages, version conflicts -> healer
     ENVIRONMENT_FAILURE = "environment_failure"  # driver/browser/JDK/tool missing or mismatched -> healer
-    LOCATOR_FAILURE = "locator_failure"  # element not found, locator timeouts -> user (test data)
+    LOCATOR_FAILURE = "locator_failure"  # element not found, locator timeouts -> healer (HEAL_LOCATOR_FAILURES) or user
+    TEST_CODE_FAILURE = "test_code_failure"  # the test code itself throws (wrong key, null, bad cast) -> healer
     TEST_FAILURE = "test_failure"  # assertions, application behaviour -> user
     NO_TESTS = "no_tests"  # the command ran but executed no tests
     UNKNOWN = "unknown"
 
 
-HEALABLE_KINDS = frozenset({FailureKind.BUILD_FAILURE, FailureKind.DEPENDENCY_FAILURE, FailureKind.ENVIRONMENT_FAILURE})
+HEALABLE_KINDS = frozenset({
+    FailureKind.BUILD_FAILURE, FailureKind.DEPENDENCY_FAILURE, FailureKind.ENVIRONMENT_FAILURE, FailureKind.TEST_CODE_FAILURE,
+})
 
 
 class FailureClassificationModel(BaseModel):

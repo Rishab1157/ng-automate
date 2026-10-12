@@ -10,10 +10,14 @@ from pathlib import Path, PurePosixPath
 from app.models.analyzerModel import FactSheetModel
 from app.models.healerModel import FileChangeModel
 from app.models.testDataModel import TestCaseSpecModel
+from app.models.testGeneratorModel import UnverifiedLocatorModel
 
 GENERATED_DIR = "ngauto"
 GENERATED_TAG = "@ngauto"
-MISSING_LOCATOR = "step {step} ({action}) has no locator in the test data"
+NO_STEPS = "the case has no steps"
+# Put by the generator (and the healer) on every locator that is not in the test data or the project: a person
+# should check it.
+UNVERIFIED_MARKER = "NGAUTO-UNVERIFIED"
 
 _FEATURE_LINE = re.compile(r"^(\s*)Feature:", re.MULTILINE)
 _TEST_FILE = re.compile(
@@ -46,16 +50,41 @@ def placement_rule(fact_sheet: FactSheetModel) -> str:
 
 
 def runnable_cases(cases: list[TestCaseSpecModel]) -> tuple[list[TestCaseSpecModel], list[tuple[str, str]]]:
-    """Cases the generator can write, and (case id, reason) for the ones it must leave out."""
+    """Cases the generator can write, and (case id, reason) for the ones it must leave out.
+
+    A step without a locator does not leave its case out: the generator finds one or assumes one and marks it
+    (UNVERIFIED_MARKER). Only a case without any step cannot become a test.
+    """
     runnable: list[TestCaseSpecModel] = []
     skipped: list[tuple[str, str]] = []
     for case in cases:
-        missing = next(((n, s) for n, s in enumerate(case.steps, start=1) if s.needs_locator), None)
-        if missing is None:
+        if case.steps:
             runnable.append(case)
         else:
-            skipped.append((case.id, MISSING_LOCATOR.format(step=missing[0], action=missing[1].action)))
+            skipped.append((case.id, NO_STEPS))
     return runnable, skipped
+
+
+def unverified_locators(project_root: Path, files: list[FileChangeModel], limit: int = 200) -> list[UnverifiedLocatorModel]:
+    """The marked (assumed) locators in the files the generator wrote: file, line and the code line."""
+    found: list[UnverifiedLocatorModel] = []
+    for change in files:
+        if change.change == "deleted":
+            continue
+        try:
+            lines = (project_root / change.path).read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for index, line in enumerate(lines):
+            if UNVERIFIED_MARKER not in line:
+                continue
+            code = line.split(UNVERIFIED_MARKER, 1)[0].rstrip(" \t/#*").strip()
+            if not code and index + 1 < len(lines):
+                code = lines[index + 1].strip()  # the comment sits on its own line, above the locator
+            found.append(UnverifiedLocatorModel(path=change.path, line=index + 1, code=code[:300]))
+            if len(found) >= limit:
+                return found
+    return found
 
 
 def tag_untagged_features(project_root: Path, files: list[FileChangeModel]) -> list[str]:

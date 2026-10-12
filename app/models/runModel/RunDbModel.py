@@ -17,6 +17,7 @@ class RunCreateDbModel(BaseModel):
     model_connection_id: ObjectId | None = None
     mode: str
     test_selector: str | None = None
+    test_files: list[str] | None = None
     test_data_id: ObjectId | None = None
     run_scope: str = "generated"
     status: str
@@ -24,6 +25,9 @@ class RunCreateDbModel(BaseModel):
     # Same shape as RunOutputsModel; profile_id is stored as an ObjectId once set.
     outputs: dict[str, Any] = Field(default_factory=dict)
     sandbox_container_id: str | None = None
+    # The server executing the run and its last heartbeat: another server takes over only a stale run.
+    owner: str | None = None
+    heartbeat_at: datetime | None = None
     error: dict[str, str] | None = None
     # Counter for run_events.seq, incremented atomically per event.
     event_seq: int = 0

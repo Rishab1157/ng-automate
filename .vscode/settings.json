@@ -2,7 +2,8 @@
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
   "python.analysis.extraPaths": [
     "${workspaceFolder}/third_party/software-agent-sdk/openhands-sdk",
-    "${workspaceFolder}/third_party/software-agent-sdk/openhands-tools"
+    "${workspaceFolder}/third_party/software-agent-sdk/openhands-tools",
+    "${workspaceFolder}/third_party/software-agent-sdk/openhands-workspace"
   ],
   "python.testing.pytestEnabled": true,
   "python.testing.pytestArgs": ["tests"],

@@ -53,6 +53,11 @@ class BaseRepository:
         result = await self.collection.update_one(filter, update)
         return result.modified_count
 
+    async def update_many(self, filter: dict[str, Any], update: dict[str, Any]) -> int:
+        self._ensure_writable()
+        result = await self.collection.update_many(filter, update)
+        return result.modified_count
+
     async def find_one_and_update(
         self,
         filter: dict[str, Any],

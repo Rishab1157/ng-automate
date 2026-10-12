@@ -1,7 +1,9 @@
 import json
 import random
+import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from bson import ObjectId
@@ -11,12 +13,13 @@ from pymongo import MongoClient
 from app.config import settings
 from app.core.exceptions import ErrorMessages
 from app.permissions.ngAutomatePermission import NGAUTOMATE_ACCESS_ALL_ORGS
+from tests.conftest import make_zip
 from tests.test_run_service import seed_model_connection, seed_profile, seed_project
 
 BASE = "/tx-agents/ng-automate/run"
 PROJECT_BASE = "/tx-agents/ng-automate/project"
 RUN_FIELDS = {
-    "id", "org_id", "project_id", "created_by", "model_connection_id", "mode", "test_selector", "test_data_id", "run_scope", "status", "stage", "error", "profile_id",
+    "id", "org_id", "project_id", "created_by", "model_connection_id", "mode", "test_selector", "test_files", "test_data_id", "run_scope", "status", "stage", "error", "profile_id",
     "generation", "test_report",
     "created_at", "updated_at", "started_at", "finished_at",
 }
@@ -341,11 +344,12 @@ def test_generate_run_needs_test_data_of_the_same_project(
     assert executor.submitted == []
 
 
-def test_generate_run_needs_at_least_one_case_with_its_locators(
+def test_a_case_without_locators_can_be_generated(
     client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
 ) -> None:
     headers = auth_headers(org_id)
     project_id = seed_project(mongo, org_id)
+    seed_profile(mongo, org_id, project_id, datetime.now(UTC))
     cases = [{"id": "LOGOUT-1", "title": "Logout", "steps": [{"action": "click"}]}]
     test_data_id = client.post(
         f"{PROJECT_BASE}/{project_id}/test-data", headers=headers,
@@ -354,7 +358,23 @@ def test_generate_run_needs_at_least_one_case_with_its_locators(
 
     response = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id, "mode": "generate", "test_data_id": test_data_id})
 
-    assert (response.status_code, _error(response)["message"]) == (400, ErrorMessages.NO_RUNNABLE_TEST_CASES)
+    assert response.status_code == 202, response.text  # the generator assumes the locator and marks it
+    assert executor.submitted == [response.json()["id"]]
+
+
+def test_test_data_whose_cases_have_no_steps_is_refused_before_any_run(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers = auth_headers(org_id)
+    project_id = seed_project(mongo, org_id)
+    cases = [{"id": "LOGOUT-1", "title": "Logout", "steps": []}]
+
+    upload = client.post(
+        f"{PROJECT_BASE}/{project_id}/test-data", headers=headers,
+        files={"file": ("cases.json", json.dumps(cases).encode(), "application/json")},
+    )
+
+    assert upload.status_code == 400  # a case needs steps to become a test
     assert executor.submitted == []
 
 
@@ -525,3 +545,101 @@ def test_other_org_needs_all_orgs_permission(
 
     assert response.status_code == 403
     assert executor.submitted == []
+
+
+def test_a_test_run_can_run_just_the_chosen_test_files(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers = auth_headers(org_id)
+    upload = client.post(f"{PROJECT_BASE}/upload", headers=headers, files={"file": ("shop.zip", make_zip({
+        "pom.xml": "<project/>",
+        "src/test/java/com/acme/LoginTest.java": "class LoginTest extends BaseTest {\n  @Test public void valid() {}\n}\n",
+        "src/test/java/com/acme/BaseTest.java": "class BaseTest {\n  @BeforeMethod public void setUp() {}\n}\n",
+        "src/test/java/com/acme/pages/LoginPage.java": "class LoginPage {}",
+    }), "application/zip")})
+    project_id = upload.json()["id"]
+    tree = client.get(f"{PROJECT_BASE}/{project_id}/files", headers=headers).json()
+    acme = tree["project"][0]["children"][0]["children"][0]["children"][0]["children"][0]  # src/test/java/com/acme
+    assert {node["name"]: node["is_test"] for node in acme["children"]} == {
+        "pages": False, "BaseTest.java": False, "LoginTest.java": True,  # BaseTest is named like a test but has none
+    }
+
+    chosen = client.post(f"{BASE}/", headers=headers, json={
+        "project_id": project_id, "mode": "test", "test_files": ["src/test/java/com/acme/LoginTest.java"],
+    })
+    page = client.post(f"{BASE}/", headers=headers, json={
+        "project_id": project_id, "mode": "test", "test_files": ["src/test/java/com/acme/pages/LoginPage.java"],
+    })
+    missing = client.post(f"{BASE}/", headers=headers, json={
+        "project_id": project_id, "mode": "test", "test_files": ["src/test/java/com/acme/GoneTest.java"],
+    })
+    base = client.post(f"{BASE}/", headers=headers, json={
+        "project_id": project_id, "mode": "test", "test_files": ["src/test/java/com/acme/BaseTest.java"],
+    })
+    both = client.post(f"{BASE}/", headers=headers, json={
+        "project_id": project_id, "mode": "test", "test_selector": "LoginTest",
+        "test_files": ["src/test/java/com/acme/LoginTest.java"],
+    })
+
+    assert chosen.status_code == 202, chosen.text
+    assert chosen.json()["test_files"] == ["src/test/java/com/acme/LoginTest.java"]
+    assert [response.status_code for response in (page, missing, base, both)] == [400, 400, 400, 400]
+    assert executor.submitted == [chosen.json()["id"]]
+
+
+def test_a_projects_runs_are_listed_newest_first(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers = auth_headers(org_id)
+    project_id = seed_project(mongo, org_id)
+    other_project = seed_project(mongo, org_id)
+    seed_profile(mongo, org_id, project_id, datetime.now(UTC))
+    analyze = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id}).json()
+    test = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id, "mode": "test"}).json()
+    client.post(f"{BASE}/", headers=headers, json={"project_id": other_project})
+
+    every = client.get(f"{BASE}/", headers=headers, params={"project_id": project_id})
+    analyses = client.get(f"{BASE}/", headers=headers, params={"project_id": project_id, "mode": "analyze"})
+    stranger = client.get(f"{BASE}/", headers=auth_headers(str(ObjectId())), params={"project_id": project_id})
+
+    assert every.status_code == 200
+    assert [run["id"] for run in every.json()] == [test["id"], analyze["id"]]
+    assert set(every.json()[0]) == RUN_FIELDS
+    assert [run["id"] for run in analyses.json()] == [analyze["id"]]
+    assert stranger.status_code == 404
+
+
+def test_the_runs_live_copy_shows_what_its_agents_changed_so_far(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str,
+    tmp_path: Path,
+) -> None:
+    headers = auth_headers(org_id)
+    upload = client.post(f"{PROJECT_BASE}/upload", headers=headers, files={"file": ("shop.zip", make_zip({
+        "pom.xml": "<project/>\n", "src/test/java/LoginTest.java": "class LoginTest {}\n",
+    }), "application/zip")})
+    project_id = upload.json()["id"]
+    run_id = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id, "mode": "test"}).json()["id"]
+    copy = tmp_path / "run" / "project"  # the run's copy, as an agent left it half-way
+    (copy / "src/test/java").mkdir(parents=True)
+    (copy / "pom.xml").write_bytes(b"<project><!-- fixed --></project>\n")
+    (copy / "src/test/java/LoginTest.java").write_bytes(b"class LoginTest {}\n")
+    (copy / "src/test/java/CartTest.java").write_bytes(b"class CartTest {}\n")
+    mongo[settings.MONGO_DATABASE].runs.update_one({"_id": ObjectId(run_id)}, {"$set": {"outputs.project_dir": str(copy)}})
+
+    live = client.get(f"{BASE}/{run_id}/files", headers=headers).json()
+    content = client.get(f"{BASE}/{run_id}/files/content", headers=headers, params={"path": "src/test/java/CartTest.java"}).json()
+    escape = client.get(f"{BASE}/{run_id}/files/content", headers=headers, params={"path": "../../etc/passwd"})
+
+    assert live["live"] is True
+    assert [(c["path"], c["change"]) for c in live["changes"]] == [
+        ("pom.xml", "modified"), ("src/test/java/CartTest.java", "added"),
+    ]
+    assert "+<project><!-- fixed --></project>" in live["changes"][0]["diff"]
+    assert (content["content"], content["editable"]) == ("class CartTest {}\n", False)
+    assert escape.status_code == 400
+
+    # The run is over and its copy is gone: its changes are in the project now.
+    shutil.rmtree(copy)
+    done = client.get(f"{BASE}/{run_id}/files", headers=headers).json()
+    assert (done["live"], done["changes"]) == (False, [])
+    assert [node["name"] for node in done["project"]] == ["src", "pom.xml"]

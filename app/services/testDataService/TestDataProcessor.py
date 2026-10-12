@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from app.core.exceptions import ErrorMessages, NgAutomateException, NotFoundError
 from app.models.testDataModel import TestDataFormat, TestDataSetModel, TestDataStatus
+from app.utils.AgentLibraries import load_agent_libraries
 
 if TYPE_CHECKING:
     from app.agents.TestGeneratorAgent.TestCaseExtractor import TestCaseExtractor
@@ -116,7 +117,10 @@ class TestDataProcessor:
                 await self.test_data_service.mark_ready(test_data_id, data_set)
 
     def _extract(self, llm_config: "LlmConfigModel", text: str, source_format: TestDataFormat) -> TestDataSetModel:
-        # In the worker thread: the first use imports the LLM libraries, which would stall the event loop.
+        # In the worker thread: the first use imports the LLM libraries, which would stall the event loop. They load
+        # through the one guarded loader, never at the same time as the startup preload (that can deadlock).
+        if self._extractor_factory is None:
+            load_agent_libraries()
         return self.extractor_factory(llm_config).extract(text, source_format)
 
     def _concurrency_slots(self) -> asyncio.Semaphore:

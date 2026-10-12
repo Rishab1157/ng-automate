@@ -22,6 +22,7 @@ from app.core.logging_config import setup_logging
 from app.db.indexes import ensure_indexes
 from app.db.mongo import close_client, ping
 from app.db.qdrant import close_qdrant_client
+from app.utils.AgentLibraries import load_agent_libraries
 from app.services.testDataService import test_data_processor
 
 logger = logging.getLogger(__name__)
@@ -36,11 +37,10 @@ Endpoints work in your own organization; `?target_org_id=` needs `NGAUTOMATE:ACC
 
 def _load_agent_libraries() -> None:
     """The agents' libraries (OpenHands, LiteLLM, LangGraph) take ~10 s to import. Loading them in the background
-    right after startup keeps the API responsive and the first run from stalling the event loop."""
+    right after startup keeps the API responsive and the first run from stalling the event loop. Everything else that
+    needs them waits on the same loader, so two threads never import them at once (that can deadlock)."""
     try:
-        import app.agents.MasterAgent.MasterGraph  # noqa: F401
-        import app.agents.MasterAgent.MasterNodes  # noqa: F401
-        import app.agents.TestGeneratorAgent.TestCaseExtractor  # noqa: F401
+        load_agent_libraries()
     except Exception:
         logger.exception("Could not preload the agent libraries; they load on first use instead")
 
@@ -58,8 +58,10 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             if reading:
                 logger.info("Reading %d test-data source(s) again", reading)
         except Exception:
-            # The API still starts; the runs stay unfinished and are resumed on the next start.
+            # The API still starts; the sweep below takes the runs over a little later.
             logger.exception("Could not resume interrupted runs")
+        # Heartbeats for the runs executing here, and the sweep that takes over runs whose server stopped.
+        run_executor.start()
     else:
         logger.warning("MongoDB not reachable at startup (%s)", settings.MONGO_DATABASE)
     yield

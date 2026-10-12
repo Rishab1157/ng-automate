@@ -1,16 +1,24 @@
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
+from fastapi.responses import FileResponse
 
 from app.core.security import get_current_user, require_permission, resolve_org_id
-from app.dto.projectDto import CreateGitProjectDTO, ProjectResponseDTO
+from app.dto.projectDto import (
+    CreateGitProjectDTO,
+    ProjectFileContentResponseDTO,
+    ProjectFileTreeResponseDTO,
+    ProjectResponseDTO,
+    SaveProjectFileDTO,
+)
 from app.dto.projectProfileDto import ProjectProfileResponseDTO
 from app.dto.testDataDto import TestDataResponseDTO, TestDataSummaryResponseDTO, UpdateTestDataCasesDTO
 from app.models.authModel import CurrentUserModel
+from app.models.projectFileModel import ProjectFileRoot
 from app.models.testDataModel import TestDataStatus
 from app.permissions.ngAutomatePermission import NGAUTOMATE_ACCESS_PERM
 from app.services.projectProfileService import ProjectProfileService
-from app.services.projectService import ProjectService
+from app.services.projectService import ProjectFileService, ProjectService
 from app.services.testDataService import TestDataService, test_data_processor
 from app.utils.TestDataParser import MAX_TEST_DATA_BYTES
 
@@ -25,6 +33,7 @@ router = APIRouter(
 project_service = ProjectService()
 project_profile_service = ProjectProfileService()
 test_data_service = TestDataService()
+project_file_service = ProjectFileService()
 
 
 @router.post(
@@ -178,3 +187,51 @@ async def retry_test_data(project_id: str, test_data_id: str, org_id: str = Depe
 async def _read_chunks(file: UploadFile) -> AsyncIterator[bytes]:
     while chunk := await file.read(UPLOAD_CHUNK_BYTES):
         yield chunk
+
+
+@router.get(
+    "/{project_id}/files",
+    summary="The editor's file tree: the project's editable files and, beside them (never inside), its test-data "
+    "files. busy=true while a run uses the project (its files are read-only until the run has finished).",
+)
+async def get_project_files(project_id: str, org_id: str = Depends(resolve_org_id)) -> ProjectFileTreeResponseDTO:
+    return ProjectFileTreeResponseDTO.from_model(await project_file_service.tree(project_id, org_id))
+
+
+@router.get(
+    "/{project_id}/files/content",
+    summary="One file's text. Binary or very large files come back with binary=true and no content: download them.",
+)
+async def get_project_file(
+    project_id: str,
+    path: str = Query(min_length=1, max_length=1000, description="Path inside the folder, e.g. pom.xml"),
+    root: ProjectFileRoot = Query(ProjectFileRoot.PROJECT, description="project, or test-data"),
+    org_id: str = Depends(resolve_org_id),
+) -> ProjectFileContentResponseDTO:
+    return ProjectFileContentResponseDTO.from_model(await project_file_service.read(project_id, org_id, root, path))
+
+
+@router.put(
+    "/{project_id}/files/content",
+    summary="Save a text file of the project (a new path creates it). The next run starts from the saved files. "
+    "409 while a run uses the project.",
+)
+async def save_project_file(
+    project_id: str, dto: SaveProjectFileDTO, org_id: str = Depends(resolve_org_id)
+) -> ProjectFileContentResponseDTO:
+    return ProjectFileContentResponseDTO.from_model(await project_file_service.save(project_id, org_id, dto.path, dto.content))
+
+
+@router.get(
+    "/{project_id}/files/download",
+    summary="Download one file of the project or of its test data, as it is.",
+    response_class=FileResponse,
+)
+async def download_project_file(
+    project_id: str,
+    path: str = Query(min_length=1, max_length=1000),
+    root: ProjectFileRoot = Query(ProjectFileRoot.PROJECT),
+    org_id: str = Depends(resolve_org_id),
+) -> FileResponse:
+    target = await project_file_service.file_path(project_id, org_id, root, path)
+    return FileResponse(target, filename=target.name)

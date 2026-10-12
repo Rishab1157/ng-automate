@@ -1,18 +1,29 @@
 """Runs the master agent in the background, a few runs at a time.
 
 The run document records how far a run got, so the executor keeps no state across restarts: on startup it resumes
-every unfinished run, and on shutdown it stops the running ones without marking them finished.
+unfinished runs, and on shutdown it stops the running ones without marking them finished.
+
+Several servers may share one database (or a second one is started by mistake). A run is executed by one server at a
+time: the server claims it, marks it with its id and refreshes a heartbeat; another server takes a run over only when
+that heartbeat is older than RUN_LEASE_SECONDS (its server stopped or crashed). A clean shutdown hands its runs back
+at once.
 """
 
 import asyncio
 import logging
+import os
+import socket
+import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from app.agents.HealerAgent.HealLoopPolicy import describe_test_report
 from app.config import settings
 from app.core.exceptions import ErrorCode, ErrorMessages, NgAutomateException, NotFoundError
 from app.models.runModel import RunEventType, RunModel, RunStatus, TestReportModel
+
+from app.utils.AgentLibraries import agent_libraries_ready
 
 from .MasterState import initial_state
 from .RunControl import RunControl
@@ -32,6 +43,7 @@ RUN_TIMEOUT_MESSAGE = "The run took longer than {seconds} seconds and was stoppe
 
 RUN_COMPLETED_MESSAGE = "Run completed: the project profile is ready"
 TEST_RUN_COMPLETED_MESSAGE = "Run completed: {summary}"
+GENERATE_RUN_COMPLETED_MESSAGE = "Run completed: the generated tests are saved in the project, ready to review and run"
 
 _FINISHED_STATUSES = (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED)
 
@@ -62,6 +74,9 @@ class RunExecutor:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._slots: asyncio.Semaphore | None = None
         self._slots_loop: asyncio.AbstractEventLoop | None = None
+        # This server, as run owner: host, process and a random part (a restarted process is a new owner).
+        self.instance_id = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        self._maintenance: asyncio.Task[None] | None = None
 
     @property
     def run_service(self) -> RunService:
@@ -97,25 +112,61 @@ class RunExecutor:
         task.add_done_callback(lambda done: self._forget(run_id, done))
 
     async def resume_interrupted(self) -> int:
-        """On startup: restart every queued or running run, after stopping a container a crash left behind."""
+        """Take over the unfinished runs no live server is executing, after stopping a container their stopped server
+        left behind. A run another server is executing (fresh heartbeat) is left alone."""
+        stale_before = self._stale_before()
         resumed = 0
-        for run in await self.run_service.find_unfinished():
+        for run in await self.run_service.find_resumable(stale_before):
             if self._is_live(run.id):
                 continue
+            if not await self.run_service.claim(run.id, self.instance_id, stale_before):
+                continue  # another server took it a moment ago
             if run.sandbox_container_id:
                 await self._stop_container(run.id, run.sandbox_container_id)
             await self.submit(run.id)
             resumed += 1
         return resumed
 
+    def start(self) -> None:
+        """Start the heartbeat for the runs executing here, and the sweep that takes over runs whose server stopped."""
+        if self._maintenance is None or self._maintenance.done():
+            self._maintenance = asyncio.create_task(self._maintain(), name="run-executor-maintenance")
+
     async def shutdown(self) -> None:
-        """Stop the runs executing here. They stay unfinished and resume on the next start."""
-        tasks = [task for task in self._tasks.values() if not task.done()]
-        for task in tasks:
+        """Stop the runs executing here and hand them back: they stay unfinished and the next server resumes them."""
+        if self._maintenance is not None:
+            self._maintenance.cancel()
+            await asyncio.gather(self._maintenance, return_exceptions=True)
+            self._maintenance = None
+        running = {run_id: task for run_id, task in self._tasks.items() if not task.done()}
+        for task in running.values():
             task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-            logger.info("Stopped %d run(s); they resume on the next start", len(tasks))
+        if running:
+            await asyncio.gather(*running.values(), return_exceptions=True)
+            logger.info("Stopped %d run(s); they resume on the next start", len(running))
+            try:
+                await self.run_service.release(self.instance_id, list(running))
+            except Exception:
+                logger.exception("Could not hand the stopped runs back; another server takes them over after the lease")
+
+    async def _maintain(self) -> None:
+        loop = asyncio.get_running_loop()
+        last_scan = loop.time()  # startup has just resumed what it could
+        while True:
+            await asyncio.sleep(settings.RUN_HEARTBEAT_SECONDS)
+            try:
+                live = [run_id for run_id in list(self._tasks) if self._is_live(run_id)]
+                await self.run_service.heartbeat(self.instance_id, live)
+                if loop.time() - last_scan >= settings.RUN_ORPHAN_SCAN_SECONDS:
+                    last_scan = loop.time()
+                    taken = await self.resume_interrupted()
+                    if taken:
+                        logger.info("Took over %d run(s) whose server stopped", taken)
+            except Exception:
+                logger.exception("Run heartbeat or sweep failed; trying again")
+
+    def _stale_before(self) -> datetime:
+        return datetime.now(UTC) - timedelta(seconds=settings.RUN_LEASE_SECONDS)
 
     async def _execute(self, run_id: str) -> None:
         async with self._concurrency_slots():
@@ -125,6 +176,9 @@ class RunExecutor:
                 logger.warning("Run %s no longer exists", run_id)
                 return
             if run.status in _FINISHED_STATUSES:
+                return
+            if not await self.run_service.claim(run_id, self.instance_id, self._stale_before()):
+                logger.info("Run %s is executing on another server; left alone", run_id)
                 return
             try:
                 await self._run_graph(run)
@@ -164,6 +218,8 @@ class RunExecutor:
     async def _execute_graph(self, run: RunModel, deadline: asyncio.Timeout) -> None:
         try:
             await self.run_service.mark_running(run.id)
+            if self._graph_factory is None:
+                await agent_libraries_ready()  # never import them on the event loop, nor next to the preload
             graph = self._get_graph()
             state = initial_state(run)
             async with deadline:
@@ -189,6 +245,8 @@ class RunExecutor:
         """The run-completed event: what the run produced, in one line."""
         data: dict[str, Any] = {"profile_id": final_state.get("profile_id")}
         message = RUN_COMPLETED_MESSAGE
+        if final_state.get("generation"):
+            message = GENERATE_RUN_COMPLETED_MESSAGE
         if final_state.get("test_report"):
             report = TestReportModel.model_validate(final_state["test_report"])
             message = TEST_RUN_COMPLETED_MESSAGE.format(summary=describe_test_report(report))
@@ -210,14 +268,24 @@ class RunExecutor:
         copy of the project once the run is finished. Never raises: another error may be on its way out."""
         try:
             run = await self.run_service.get_by_id(run_id)
+            if self._sandbox_service is None:
+                await agent_libraries_ready()
             if run.sandbox_container_id:
                 await self._stop_container(run_id, run.sandbox_container_id)
+            if run.status == RunStatus.COMPLETED:
+                # What the agents kept goes into the project's editable copy (the editor shows it).
+                try:
+                    await asyncio.to_thread(self.sandbox_service.write_back_run_changes, run)
+                except Exception:
+                    logger.exception("Could not write run %s's changes back to its project", run_id)
             if run.status in _FINISHED_STATUSES:
                 await asyncio.to_thread(self.sandbox_service.remove_run_dir, run_id)
         except Exception:
             logger.exception("Could not clean up after run %s", run_id)
 
     async def _stop_container(self, run_id: str, container_id: str) -> None:
+        if self._sandbox_service is None:
+            await agent_libraries_ready()
         try:
             await asyncio.to_thread(self.sandbox_service.stop_container, container_id)
         except Exception:

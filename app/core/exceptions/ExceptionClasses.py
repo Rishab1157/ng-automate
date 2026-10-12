@@ -58,6 +58,11 @@ class RunNotActiveError(NgAutomateException):
         super().__init__(message, ErrorCode.RUN_NOT_ACTIVE, status_code=409, details=details)
 
 
+class ProjectBusyError(NgAutomateException):
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message, ErrorCode.PROJECT_BUSY, status_code=409, details=details)
+
+
 class LiveViewUnavailableError(NgAutomateException):
     def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__(message, ErrorCode.LIVE_VIEW_UNAVAILABLE, status_code=409, details=details)

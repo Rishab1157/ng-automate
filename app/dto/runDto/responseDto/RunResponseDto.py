@@ -21,6 +21,7 @@ class RunResponseDTO(BaseModel):
     model_connection_id: str | None = None
     mode: RunMode
     test_selector: str | None = None
+    test_files: list[str] | None = None
     test_data_id: str | None = None
     run_scope: RunScope = RunScope.GENERATED
     status: RunStatus
@@ -46,6 +47,7 @@ class RunResponseDTO(BaseModel):
             model_connection_id=run.model_connection_id,
             mode=run.mode,
             test_selector=run.test_selector,
+            test_files=run.test_files,
             test_data_id=run.test_data_id,
             run_scope=run.run_scope,
             status=run.status,
