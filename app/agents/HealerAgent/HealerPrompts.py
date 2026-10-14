@@ -18,7 +18,7 @@ _MEMORY_OUTCOME: dict[HealMemoryResult, str] = {
     HealMemoryResult.FIXED: "worked: the tests passed afterwards",
     HealMemoryResult.CHANGED: "fixed that problem; a different failure came next",
     HealMemoryResult.NOT_FIXED: "did not work: the same failure came back",
-    HealMemoryResult.WORSE: "made it worse: fewer tests passed afterwards (or none ran), so it was undone",
+    HealMemoryResult.WORSE: "made it worse: fewer tests passed afterwards (or none ran)",
     HealMemoryResult.BLOCKED: "the healer was blocked by the environment",
     HealMemoryResult.UNFINISHED: "unfinished: the healer stopped before the tests ran again",
 }
@@ -46,7 +46,7 @@ Find the cause yourself and fix it. You work in your own sandbox with a terminal
 configuration, install or upgrade dependencies, download tools, drivers or browsers. If one approach does not work,
 try another one.
 
-Rules (a change that breaks them is rolled back automatically):
+Rules (every change you make is kept; a change that breaks them is reported to the user):
 - Fix only technical problems: dependencies and versions, build configuration, imports, syntax, tools and drivers,
   locators that do not find their element, and errors thrown by the test code itself.
 - A build that does not compile lists every error with its file and line: fix all of them. `cannot find symbol` for a
@@ -136,7 +136,7 @@ def describe_stack(fact_sheet: FactSheetModel) -> str:
 
 
 def _previous(outcomes: Sequence[HealOutcomeModel]) -> str:
-    """Earlier fixes in this run did not make the tests pass: say what they did, and what was rolled back."""
+    """Earlier fixes in this run did not make the tests pass: say what they did (their changes are all still there)."""
     if not outcomes:
         return ""
     lines: list[str] = []
@@ -145,16 +145,11 @@ def _previous(outcomes: Sequence[HealOutcomeModel]) -> str:
         if len(summary) > MAX_PREVIOUS_SUMMARY_CHARS:
             summary = summary[: MAX_PREVIOUS_SUMMARY_CHARS - 1] + "…"
         line = f"- Fix {number}: {summary}"
-        if outcome.undone:
-            line += (
-                f" Undone: the tests got worse with its changes ({', '.join(change.path for change in outcome.changes)}),"
-                " so those files are back as they were. Do not make that change again."
-            )
-        elif outcome.changes:
-            line += f" Kept changes: {', '.join(change.path for change in outcome.changes)}."
-        for path in outcome.reverted_files:
+        if outcome.changes:
+            line += f" Changed: {', '.join(change.path for change in outcome.changes)}."
+        for path in sorted({violation.file for violation in outcome.violations}):
             rules = ", ".join(sorted({v.rule for v in outcome.violations if v.file == path}))
-            line += f" Rolled back {path} ({rules})."
+            line += f" Broke the rules in {path} ({rules})."
         if outcome.blocker_rejected:
             line += " Its blocker was not accepted: the quoted error was not in the output of any command it ran."
         lines.append(line)

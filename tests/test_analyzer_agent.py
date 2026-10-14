@@ -831,12 +831,12 @@ def test_remote_runs_are_bounded_by_the_run_timeout(
 ) -> None:
     remote = FakeRemoteConversation(_fenced(_answer()))
     monkeypatch.setattr(analyzer_module, "Conversation", lambda agent, **kwargs: remote)
-    monkeypatch.setattr(settings, "RUN_TIMEOUT_SECONDS", 120)
+    monkeypatch.setattr(settings, "RUN_TIMEOUT_SECONDS", 20)  # shorter than one wait slice
 
     AnalyzerAgent(_llm_config()).analyze(LocalWorkspace(working_dir=str(tmp_path)), fact_sheet)
 
     [timeout] = remote.timeouts
-    assert 100 < timeout <= 120
+    assert 10 < timeout <= 20
     assert remote.closed
 
 

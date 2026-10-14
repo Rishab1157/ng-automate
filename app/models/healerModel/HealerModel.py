@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 
 
 class GuardViolationModel(BaseModel):
-    """An edit the healer is not allowed to make (it would hide a failure instead of fixing it)."""
+    """A risky edit by an agent (it may hide a failure instead of fixing it): kept, and reported for the user."""
 
     file: str  # repo-relative
     rule: str  # e.g. "assertion_removed", "test_skipped"
@@ -19,10 +19,9 @@ class FileChangeModel(BaseModel):
 
 class HealOutcomeModel(BaseModel):
     summary: str  # the agent's own short explanation of what it changed and why
-    changes: list[FileChangeModel] = Field(default_factory=list)  # changes that were kept
-    violations: list[GuardViolationModel] = Field(default_factory=list)  # forbidden edits that were found
-    reverted_files: list[str] = Field(default_factory=list)  # files restored because of a violation
-    # Why the healer stopped early (model unreachable, out of time, ...); its changes were still checked.
+    changes: list[FileChangeModel] = Field(default_factory=list)  # every change it made (all kept)
+    violations: list[GuardViolationModel] = Field(default_factory=list)  # risky changes, kept, for the user to review
+    # Why the healer stopped early (model unreachable, out of time, ...); its changes are still checked and kept.
     error: str | None = None
     # The agent's blocker (reason and the command output that proves it): nothing it can do gets past it.
     blocker: str | None = None
@@ -30,5 +29,3 @@ class HealOutcomeModel(BaseModel):
     blocker_rejected: bool = False
     # Time the healer worked, without paused time: counts against the run's healing budget.
     seconds: float = 0.0
-    # The test run after this heal was worse (fewer tests passed, or none ran), so its changes were put back.
-    undone: bool = False

@@ -99,7 +99,6 @@ class HealMemoryMapper:
             problem=describe_problem(attempt.result),
             fix_summary=heal.summary[:MAX_SUMMARY_CHARS],
             changed_files=[change.path for change in heal.changes][:MAX_FILES],
-            reverted_files=heal.reverted_files[:MAX_FILES],
             diff=diff if len(diff) <= MAX_DIFF_CHARS else diff[: MAX_DIFF_CHARS - 1] + "…",
             blocker=heal.blocker,
             result=result.value,

@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 from app.core.security import get_current_user, require_permission, resolve_org_id
 from app.dto.projectDto import (
     CreateGitProjectDTO,
+    ProjectDeletedResponseDTO,
     ProjectFileContentResponseDTO,
     ProjectFileTreeResponseDTO,
     ProjectResponseDTO,
@@ -23,6 +24,7 @@ from app.services.testDataService import TestDataService, test_data_processor
 from app.utils.TestDataParser import MAX_TEST_DATA_BYTES
 
 UPLOAD_CHUNK_BYTES = 1024 * 1024
+PROJECT_DELETED = "Project deleted successfully"
 
 router = APIRouter(
     prefix="/tx-agents/ng-automate/project",
@@ -94,6 +96,17 @@ async def get_projects(
 )
 async def get_project(project_id: str, org_id: str = Depends(resolve_org_id)) -> ProjectResponseDTO:
     return ProjectResponseDTO.from_model(await project_service.get(project_id, org_id))
+
+
+@router.delete(
+    "/{project_id}",
+    response_model=ProjectDeletedResponseDTO,
+    summary="Delete a project: it no longer shows anywhere (soft delete: its runs stay in the database) and its files "
+    "are removed from the server. 409 while one of its runs is still working on it.",
+)
+async def delete_project(project_id: str, org_id: str = Depends(resolve_org_id)) -> ProjectDeletedResponseDTO:
+    await project_service.delete(project_id, org_id)
+    return ProjectDeletedResponseDTO(message=PROJECT_DELETED)
 
 
 @router.get(

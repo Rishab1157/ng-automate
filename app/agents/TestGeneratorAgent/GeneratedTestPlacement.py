@@ -24,8 +24,9 @@ def placement_rule(fact_sheet: FactSheetModel) -> str:
     stack = _stack(fact_sheet)
     if stack == "cucumber":
         return (
-            "Write the scenarios in a new .feature file in the project's features folder. Add any missing step "
-            "definitions to the existing step-definition classes (or a new class next to them)."
+            "Write the scenarios in a new .feature file in the project's features folder. Put any missing step "
+            "definitions in a new step-definition class next to the existing ones (in the package the runner's glue "
+            "scans)."
         )
     if stack in ("maven", "gradle"):
         return (

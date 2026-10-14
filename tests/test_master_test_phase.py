@@ -283,31 +283,31 @@ async def test_dependency_failure_is_healed_then_the_tests_run_again_in_the_same
 
 @pytest.mark.anyio
 async def test_next_healer_hears_about_the_earlier_fix(tmp_path: Path) -> None:
-    rolled_back = HealOutcomeModel(summary="broke the pom", reverted_files=["pom.xml"])
-    setup = _setup(tmp_path, [DEPENDENCY, DEPENDENCY, PASSED], [rolled_back, FIX])
+    broke = HealOutcomeModel(summary="broke the pom", changes=[FileChangeModel(path="pom.xml", change="modified")])
+    setup = _setup(tmp_path, [DEPENDENCY, DEPENDENCY, PASSED], [broke, FIX])
 
     await setup.nodes.test_and_heal(_test_state(tmp_path))
 
-    assert [call["previous"] for call in setup.healer.calls] == [[], [rolled_back]]
+    assert [call["previous"] for call in setup.healer.calls] == [[], [broke]]
     assert setup.runs.outputs["test_report"].stop_reason == TestStopReason.PASSED
 
 
 @pytest.mark.anyio
-async def test_a_heal_that_makes_the_tests_worse_is_undone_and_the_tests_run_again(tmp_path: Path) -> None:
-    # As in a real run: the first heal fixed the build (11 of 12 tests pass), the second one edited pom.xml again for a
-    # failure inside a test and the build broke. Its edits are undone; the next heal starts from the better files.
+async def test_a_heal_that_makes_the_tests_worse_stays_and_the_next_heal_works_from_there(tmp_path: Path) -> None:
+    # Nothing is ever rolled back (the user's rule): the bad heal's files stay, the next heal gets the failure they
+    # caused, and the memory remembers the bad heal as "worse".
     code_error = _result(FailureKind.TEST_CODE_FAILURE, ["CartTest.remove: NullPointerException"], passed=11, failed=1)
     build = _result(FailureKind.BUILD_FAILURE, ["Some problems were encountered while processing the POMs"])
     first = HealOutcomeModel(summary="Set TestNG to 7.11.0", changes=[FileChangeModel(path="pom.xml", change="modified")])
     bad = HealOutcomeModel(summary="Added selenium-devtools", changes=[
         FileChangeModel(path="pom.xml", change="modified"), FileChangeModel(path="src/test/java/Junk.java", change="added"),
     ])
-    last = HealOutcomeModel(summary="Null check in CartTest", changes=[FileChangeModel(path="src/test/java/CartTest.java", change="modified")])
-    setup = _setup(tmp_path, [DEPENDENCY, code_error, build, code_error, PASSED], [first, bad, last])
+    repair = HealOutcomeModel(summary="Removed the devtools tag", changes=[FileChangeModel(path="pom.xml", change="modified")])
+    setup = _setup(tmp_path, [DEPENDENCY, code_error, build, PASSED], [first, bad, repair])
     setup.healer.edits = [
         {"pom.xml": "<project>7.11.0</project>"},
         {"pom.xml": "<project>7.11.0 devtools</project>", "src/test/java/Junk.java": "class Junk {}"},
-        {"src/test/java/CartTest.java": "class CartTest {}"},
+        {"pom.xml": "<project>7.11.0 fixed</project>"},
     ]
     state = _test_state(tmp_path)
     project = Path(state["project_dir"])
@@ -315,22 +315,15 @@ async def test_a_heal_that_makes_the_tests_worse_is_undone_and_the_tests_run_aga
 
     await setup.nodes.test_and_heal(state)
 
-    assert (project / "pom.xml").read_text(encoding="utf-8") == "<project>7.11.0</project>"
-    assert not (project / "src/test/java/Junk.java").exists()
-    runs = setup.runs
-    attempts = runs.outputs["test_attempts"]
-    assert [(a.number, a.heal.undone if a.heal else None) for a in attempts] == [
-        (1, False), (2, True), (3, None), (4, False), (5, None)
-    ]
-    assert len(setup.runner.calls) == 5
-    # The next heal works on the failure of the restored files, and hears that the bad heal was undone.
-    third = setup.healer.calls[2]
-    assert third["result"] == code_error and third["previous"][1].undone
-    assert any(event.message == "Undid the healer's changes to pom.xml, src/test/java/Junk.java: the tests got worse "
-               "with them. The tests run again without them" for event in runs.events)
-    report = runs.outputs["test_report"]
-    assert (report.stop_reason, report.changed_files) == (TestStopReason.PASSED, ["pom.xml", "src/test/java/CartTest.java"])
-    assert [(m.attempt, m.result) for _, m in setup.memory.remembered] == [(1, "changed"), (2, "worse"), (4, "fixed")]
+    assert (project / "pom.xml").read_text(encoding="utf-8") == "<project>7.11.0 fixed</project>"
+    assert (project / "src/test/java/Junk.java").read_text(encoding="utf-8") == "class Junk {}"
+    assert len(setup.runner.calls) == 4  # no extra run: nothing was undone
+    assert setup.healer.calls[2]["result"] == build  # the third heal works on what the bad heal left
+    attempts = setup.runs.outputs["test_attempts"]
+    assert [c.path for c in attempts[1].heal.changes] == ["pom.xml", "src/test/java/Junk.java"]
+    report = setup.runs.outputs["test_report"]
+    assert (report.stop_reason, report.changed_files) == (TestStopReason.PASSED, ["pom.xml", "src/test/java/Junk.java"])
+    assert [(m.attempt, m.result) for _, m in setup.memory.remembered] == [(1, "changed"), (2, "worse"), (3, "fixed")]
 
 
 @pytest.mark.anyio
@@ -366,10 +359,7 @@ async def test_the_healing_budget_is_shared_by_all_heals_of_the_run(tmp_path: Pa
     assert [call["time_limit"] for call in setup.healer.calls] == [3600, 1600]
     report = setup.runs.outputs["test_report"]
     assert (report.stop_reason, report.runs, report.heals) == (TestStopReason.TIMED_OUT, 3, 2)
-    assert setup.runs.events[-1].message == (
-        "Stopped: the healer used all of its 60 minutes of healing time · the healer's changes were not kept: the tests did not get better with them"
-    )
-    assert report.changes_kept is False  # the tests never ran better after the heals
+    assert setup.runs.events[-1].message == "Stopped: the healer used all of its 60 minutes of healing time"
 
 
 @pytest.mark.anyio

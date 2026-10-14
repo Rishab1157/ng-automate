@@ -1,7 +1,7 @@
 """A short, read-only briefing of the project's own tests and helpers, inlined into the generator prompt.
 
 A small local model tends to invent helper methods (open/type/click) instead of reading the base class first,
-and then tries to add them, which the guards roll back. Handing it the project's own base class, helpers and
+and then calls methods that do not exist. Handing it the project's own base class, helpers and
 locator/config files in the prompt makes it follow the real API from its first file. The briefing only reads
 existing files; it never changes the project.
 """

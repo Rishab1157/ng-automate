@@ -23,6 +23,13 @@ MAX_EVIDENCE_CHARS = 600
 # Stack frames kept with an error thrown by the test code: where it was thrown.
 MAX_STACK_FRAMES = 3
 
+# The build file itself no longer loads (Maven, Gradle, npm): nothing can even compile.
+_BUILD_FILE_ERRORS = (
+    r"Malformed POM|Non-parseable POM|problems were encountered while processing the POMs"
+    r"|Could not compile (?:build|settings) file|EJSONPARSE|Failed to parse JSON"
+)
+BUILD_FILE_BROKEN = re.compile(_BUILD_FILE_ERRORS, re.IGNORECASE)
+
 # Output patterns, checked in this order: the first kind with a matching line wins.
 OUTPUT_PATTERNS: list[tuple[FailureKind, re.Pattern[str]]] = [
     (FailureKind.DEPENDENCY_FAILURE, re.compile(
@@ -35,9 +42,8 @@ OUTPUT_PATTERNS: list[tuple[FailureKind, re.Pattern[str]]] = [
         r"COMPILATION ERROR|cannot find symbol|Compilation failed|error: ';' expected|SyntaxError"
         r"|IndentationError|error TS\d+|Execution failed for task ':[\w:]*compile"
         r"|ImportError while importing test module|package [\w.]+ does not exist"
-        # A build file that no longer parses (a broken edit): Maven, Gradle, npm.
-        r"|Malformed POM|Non-parseable POM|problems were encountered while processing the POMs"
-        r"|Could not compile (?:build|settings) file|EJSONPARSE|Failed to parse JSON"
+        # A build file that no longer loads (a broken edit): Maven, Gradle, npm.
+        rf"|{_BUILD_FILE_ERRORS}"
         # BDD steps without step definitions (wrong glue path, or new feature files): missing code, not a test result.
         r"|UndefinedStep|step\(s\) are undefined|step is undefined|StepDefinitionNotFoundError|You can implement missing steps",
         re.IGNORECASE,
@@ -56,6 +62,15 @@ OUTPUT_PATTERNS: list[tuple[FailureKind, re.Pattern[str]]] = [
         re.IGNORECASE,
     )),
 ]
+
+# A compiler error that names its file and line: javac/Maven "File.java:[23,1]", javac/Gradle "File.java:23:", kotlinc
+# "File.kt:23:5", tsc "file.ts(23,5)" or "file.ts:23:5", Python 'File "x.py", line 23'.
+COMPILER_DIAGNOSTIC = re.compile(
+    r"[\w./\\-]+\.(?:java|kt|kts|groovy|scala|ts|tsx|js|jsx|mjs|py|cs)(?::\[\d+,\d+\]|:\d+|\(\d+,\d+\)|\", line \d+)"
+)
+# A JVM stack frame, e.g. "	at io.cucumber.core.runtime.TestCaseResultObserver.assert(TestCaseResultObserver.java:69)"
+# or, with its module, "at java.base/java.lang.reflect.Method.invoke(Method.java:580)".
+STACK_FRAME = re.compile(r"\s*at\s+[\w$.<>/@-]+\(")
 
 # A failing test's message that means the environment (network, driver download, toolchain) stopped the run before
 # the test could check anything. Checked on the failing cases too: the build output may not repeat the message.
@@ -126,6 +141,10 @@ def classify_failure(exit_code: int, output: str, cases: list[TestCaseResultMode
     for kind, pattern in OUTPUT_PATTERNS:
         lines = _matching_lines(tail, pattern)
         if lines:
+            if kind == FailureKind.BUILD_FAILURE:
+                # The compiler's own errors (file, line, message), not a "COMPILATION ERROR" header that every build
+                # failure shares: they tell one build failure from the next (no-progress check, memory, the UI).
+                lines = _compiler_errors(tail) or lines
             return _result(kind, lines)
 
     if failing:
@@ -212,6 +231,18 @@ def _result(kind: FailureKind, evidence: list[str] | None = None) -> FailureClas
         reason=_REASONS[kind],
         evidence=[_clip(line.strip()) for line in (evidence or [])[:MAX_EVIDENCE]],
     )
+
+
+def _compiler_errors(text: str) -> list[str]:
+    """The first MAX_EVIDENCE compiler errors that name file and line, each once (Maven repeats them). A stack frame
+    ("at io.cucumber...(Runner.java:69)") names a file and line too, but it is not a compiler error."""
+    lines: list[str] = []
+    for line in text.splitlines():
+        if COMPILER_DIAGNOSTIC.search(line) and not STACK_FRAME.match(line) and line not in lines:
+            lines.append(line)
+            if len(lines) == MAX_EVIDENCE:
+                break
+    return lines
 
 
 def _matching_lines(text: str, pattern: re.Pattern[str]) -> list[str]:

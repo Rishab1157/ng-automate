@@ -2,8 +2,11 @@
 
 It works in the writable test sandbox, a few cases at a time in one conversation. A locator the test data does not
 give is looked up in the project or on the live page, or assumed and marked for review (never a reason to leave a case
-out). Its edits go through the same guards as the healer's (existing tests may not be weakened, build files must still
-parse, no backup copies) and it may not delete files. It only writes the tests: a test run runs them.
+out). It writes its tests in new files, and may change the project's own files where its tests need it (a page-object
+method, a base-class helper, a dependency). Nothing it writes is ever rolled back, whether the tests build or not (the
+user's rule: the framework may need those changes, and a rollback after the build check once left a project that no
+longer compiled). A change that looks like weakening the project (a deleted file, a removed assertion, a skipped test)
+is reported for the user to review. It only writes the tests: a test run runs them.
 """
 
 import logging
@@ -41,14 +44,16 @@ from app.models.testDataModel import TestDataSetModel
 from app.models.testGeneratorModel import GenerationOutcomeModel, SkippedCaseModel
 from app.models.testRunModel import TestCommandModel
 from app.utils.AgentConversationUtils import (
+    MODEL_UNREACHABLE_FROM_SANDBOX,
     AgentControl,
     EventForwarder,
     ask,
     build_condenser,
+    check_model_reachable,
     close_conversation,
     secret_values,
 )
-from app.utils.LlmInstance import build_llm
+from app.utils.LlmInstance import build_llm, sandbox_base_url
 from app.utils.ProjectSnapshot import ProjectSnapshot, project_fingerprint
 
 logger = logging.getLogger(__name__)
@@ -56,7 +61,7 @@ logger = logging.getLogger(__name__)
 GENERATOR_TOOL_NAMES = (FileEditorTool.name, TerminalTool.name, GlobTool.name, GrepTool.name)
 MAX_SUMMARY_CHARS = 2000
 NO_SUMMARY = "The test generator finished without a summary."
-REVERTED_NOTICE = "Rolled back {path}: the change broke the generator's rules ({rules})"
+REVIEW_NOTICE = "Please review {path}: the generator's change looks risky ({rules}). It was kept as written"
 # A small model often replies with a plan instead of a tool call, which ends its turn before it wrote anything.
 NUDGE_NOTICE = "The generator stopped without writing the tests for these cases: asking it to continue ({attempt} of {total})"
 NUDGE_MESSAGE = (
@@ -71,15 +76,15 @@ STILL_BROKEN_NOTICE = "The tests still do not build after {total} fixes: the tes
 NOT_CHECKED_NOTICE = (
     "The project does not build before any test is added, so the generated tests cannot be checked by building them"
 )
-FIX_MESSAGE = """The project does not build with the tests you wrote. Fix these errors in the files you wrote (never in the
-project's own files), then reply with a short summary:
+FIX_MESSAGE = """The project does not build with the tests you wrote. Fix these errors, then reply with a short summary:
 ```
 {errors}
 ```
-Usual causes: a missing import; a method, field or constructor that does not exist (use only what the base class, page
-objects and helpers really have: view them); a wrong type; or text that is not code, such as the line numbers that
-`view` shows, copied into a file. A file of yours that is badly broken is easiest to rewrite: `rm` it in the terminal,
-then `create` it again with its whole corrected content."""
+Usual causes: a missing import; a method, field or constructor that does not exist (use what the base class, page
+objects and helpers really have: view them; or add the missing member to the project's class, keeping it working for
+the existing tests); a wrong type; or text that is not code, such as the line numbers that `view` shows, copied into a
+file. A file of yours that is badly broken is easiest to rewrite: `rm` it in the terminal, then `create` it again with
+its whole corrected content."""
 MAX_BUILD_ERROR_LINES = 40
 MAX_BUILD_ERROR_CHARS = 4000
 NOT_REACHED = "the test generator stopped before it finished this case"
@@ -126,6 +131,10 @@ class TestGeneratorAgent:
         cases, skipped = runnable_cases(data_set.cases)
         if not cases:
             raise ValidationError(ErrorMessages.NO_RUNNABLE_TEST_CASES)
+        unreachable = check_model_reachable(workspace, sandbox_base_url(self.llm_config.base_url))
+        if unreachable is not None:
+            reason = MODEL_UNREACHABLE_FROM_SANDBOX.format(reason=unreachable)
+            return GenerationOutcomeModel(summary=NO_SUMMARY, error=_generation_failed(reason).message)
 
         snapshot = ProjectSnapshot.capture(project_dir)
         had_git_dir = (snapshot.root / GIT_DIR).exists()
@@ -163,7 +172,9 @@ class TestGeneratorAgent:
                         batch, fact_sheet, findings, command, placement_rule(fact_sheet), len(cases), briefing
                     )
                     if done == 0
-                    else build_next_batch_prompt(batch, done + 1, len(cases))
+                    else build_next_batch_prompt(
+                        batch, done + 1, len(cases), control.instructions if control is not None else ()
+                    )
                 )
                 answers.append(self._write_batch(conversation, prompt, snapshot.root, forwarder, control))
                 if checked:
@@ -176,30 +187,28 @@ class TestGeneratorAgent:
             if not had_git_dir:
                 shutil.rmtree(snapshot.root / GIT_DIR, ignore_errors=True)
 
+        # Every change stays, exactly as the build check saw it: nothing is rolled back. Risky ones are reported.
         changes = snapshot.changes()
-        violations = check_changes(snapshot, changes, allow_deletes=False, additions_only=True)
-        reverted = sorted({violation.file for violation in violations})
-        for path in reverted:
-            snapshot.restore(path)
+        violations = check_changes(snapshot, changes, allow_deletes=False)
+        flagged = sorted({violation.file for violation in violations})
+        for path in flagged:
             rules = ", ".join(sorted({v.rule for v in violations if v.file == path}))
             forwarder.notify(AgentEvent(
                 RunEventType.AGENT_ERROR,
                 RunEventLevel.INFO,
-                clip(REVERTED_NOTICE.format(path=path, rules=rules), MAX_MESSAGE_CHARS),
+                clip(REVIEW_NOTICE.format(path=path, rules=rules), MAX_MESSAGE_CHARS),
                 {"file": path, "violations": [v.model_dump() for v in violations if v.file == path]},
             ))
-        kept = [change for change in changes if change.path not in reverted]
-        logger.info("Generator wrote %d file(s) for %d of %d case(s), %d rolled back", len(kept), done, len(cases), len(reverted))
+        logger.info("Generator wrote %d file(s) for %d of %d case(s), %d to review", len(changes), done, len(cases), len(flagged))
         skipped += [(case.id, NOT_REACHED) for case in cases[done:]]
         summary = "\n\n".join(answer.strip() for answer in answers if answer.strip())
         return GenerationOutcomeModel(
             summary=(summary or NO_SUMMARY)[:MAX_SUMMARY_CHARS],
-            files=kept,
+            files=changes,
             generated_cases=[case.id for case in cases[:done]],
             skipped_cases=[SkippedCaseModel(case_id=case_id, reason=reason) for case_id, reason in skipped],
             violations=violations,
-            reverted_files=reverted,
-            unverified_locators=unverified_locators(snapshot.root, kept),
+            unverified_locators=unverified_locators(snapshot.root, changes),
             builds=builds,
             error=error,
         )
@@ -215,7 +224,7 @@ class TestGeneratorAgent:
         """Send one batch and let the agent work; nudge it when it stops before changing any file. Its final answer."""
         before = project_fingerprint(project_root)
         deadline = time.monotonic() + self.timeout_seconds
-        answer = ask(conversation, prompt, deadline, _generation_failed, control)
+        answer = ask(conversation, prompt, deadline, _generation_failed, control, forwarder)
         for attempt in range(1, self.nudges + 1):
             if (control is not None and control.is_stopped) or project_fingerprint(project_root) != before:
                 break
@@ -224,7 +233,7 @@ class TestGeneratorAgent:
                 RunEventLevel.INFO,
                 NUDGE_NOTICE.format(attempt=attempt, total=self.nudges),
             ))
-            answer = ask(conversation, NUDGE_MESSAGE, deadline, _generation_failed, control)
+            answer = ask(conversation, NUDGE_MESSAGE, deadline, _generation_failed, control, forwarder)
         return answer
 
     def _fix_build(
@@ -250,7 +259,7 @@ class TestGeneratorAgent:
                 BUILD_ERRORS_NOTICE.format(attempt=attempt, total=self.fix_rounds),
                 {"errors": errors},
             ))
-            ask(conversation, FIX_MESSAGE.format(errors=errors), deadline, _generation_failed, control)
+            ask(conversation, FIX_MESSAGE.format(errors=errors), deadline, _generation_failed, control, forwarder)
         if _build_errors(workspace, command, forwarder) is None:
             forwarder.notify(AgentEvent(RunEventType.AGENT_MESSAGE, RunEventLevel.INFO, BUILDS_NOTICE))
             return True

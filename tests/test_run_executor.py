@@ -257,8 +257,7 @@ async def test_test_run_reports_the_test_outcome_when_it_completes() -> None:
     run = make_run()
     runs = FakeRunService(run)
     report = {"outcome": "passed", "stop_reason": "passed", "detail": None, "runs": 2, "heals": 1, "total": 3,
-              "passed": 3, "failed": 0, "errors": 0, "skipped": 0, "changed_files": ["pom.xml"],
-              "changes_kept": True}
+              "passed": 3, "failed": 0, "errors": 0, "skipped": 0, "changed_files": ["pom.xml"]}
 
     async def tests_passed(state: dict[str, Any]) -> dict[str, Any]:
         return {**state, "profile_id": "profile-1", "test_report": report}

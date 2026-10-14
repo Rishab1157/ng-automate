@@ -16,7 +16,7 @@ from app.core.exceptions import ErrorMessages, NotFoundError, PayloadTooLargeErr
 from app.models.projectFileModel import FileContentModel, FileNodeModel, FileTreeModel, ProjectFileRoot, RunFilesModel
 from app.agents.RunnerAgent.TestCommandResolver import is_test_file, read_small_text
 from app.utils.ArchiveUtils import SKIPPED_DIRS
-from app.utils.ProjectSnapshot import compare_projects
+from app.utils.ProjectSnapshot import compare_projects, is_in_flight_write
 
 from .ProjectService import ProjectService
 
@@ -161,7 +161,7 @@ def _list_tree(folder: Path, mark_tests: bool = False) -> tuple[list[FileNodeMod
                     continue
                 count += 1
                 nodes.append(FileNodeModel(name=entry.name, path=path, type="folder", children=walk(Path(entry.path), f"{path}/")))
-            elif entry.is_file():
+            elif entry.is_file() and not is_in_flight_write(entry.name):
                 count += 1
                 nodes.append(FileNodeModel(
                     name=entry.name, path=path, type="file", size=entry.stat().st_size,

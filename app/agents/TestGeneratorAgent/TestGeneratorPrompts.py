@@ -1,5 +1,7 @@
 """The test generator's task message, kept compact for a small local model."""
 
+from collections.abc import Sequence
+
 from app.agents.TestGeneratorAgent.GeneratedTestPlacement import UNVERIFIED_MARKER
 from app.models.analyzerModel import AnalyzerFindingsModel, FactModel, FactSheetModel
 from app.models.testDataModel import TestCaseSpecModel, TestStepModel
@@ -27,15 +29,18 @@ Rules:
   building your own (e.g. use the wait the base class already holds; do not construct a new one, and never reference a
   constant or member that does not exist). If your test extends a class or uses a type from the project, copy that
   class's exact package/import line into your file; every type you use must be imported (if the compiler says
-  `cannot find symbol` for a type, find the file that declares or imports it and copy that import line in). Keep all
-  your changes inside the new test files you create: do not modify any existing project file.
+  `cannot find symbol` for a type, find the file that declares or imports it and copy that import line in).
+- Put your tests in new files. You may also change the project's existing files where your tests need it (for
+  example add a page-object method or a step definition, make a helper usable from your tests, add a dependency to
+  the build file); such changes are kept. Keep every existing test working: add to the existing code instead of
+  rewriting it, never delete a project file, and never remove or weaken an existing test, step or assertion.
 - {placement}
 - Use exactly the URLs, locators and values given in the steps.
 - A page is not ready the moment it loads (single-page apps render afterwards). Look up every element with the
   project's own lookup/wait helpers (the ones the base class or an existing test uses) instead of a bare
   driver.findElement / direct lookup, so the test waits for the element and can fall back to another locator.
-- To add code to an existing file (for example a step definition), view it and use the file_editor `insert` command
-  with `insert_line` (the line after which the new code goes) and `new_str`; it needs no unique text to match.
+- To add lines to a file, view it and use the file_editor `insert` command with `insert_line` (the line after which
+  the new code goes) and `new_str`; it needs no unique text.
 - When str_replace is rejected (`did not appear verbatim`, or `Multiple occurrences ... Please ensure it is
   unique`), never send the same call again: view the file and include the whole enclosing method or statement,
   with enough surrounding lines, so old_str matches exactly once (or use `insert`).
@@ -48,8 +53,8 @@ Rules:
   `By checkout = By.id("checkout"); // {marker}: assumed locator, not in the test data`. Never leave a case out.
 - If the project keeps its locators in a file and looks them up by key (however this project does that), the string
   you pass is the project's KEY, not the element's label or its locator: pass a key the project already defines.
-  When the project has no key for an element, use the step's locator directly in your test (do not add keys to the
-  project's files).
+  When the project has no key for an element, use the step's locator directly in your test, or add a key the same
+  way the project defines its other keys.
 - When a step gives more than one locator for the same element, use the first one and keep the others as a fallback
   (for example a list of candidate locators tried in order, or the extra ones in a clear comment beside the locator).
 - Assert with the project's test framework (for example TestNG Assert, JUnit Assertions, pytest assert, expect),
@@ -63,9 +68,13 @@ Rules:
 - `create` never overwrites a file. To rewrite a test file you wrote yourself (for example when it is badly broken),
   delete it first with `rm <path>` in the terminal, then `create` it again with its whole corrected content. Never do
   this to the project's own files.
-- Only ADD code. Never change or remove existing lines (tests, locators, page-object methods, step definitions):
-  other tests use them. If you need a different locator or a new action, add a new field, method or step.
-- Every step in a feature file you write must have a step definition: reuse existing steps or add new ones.
+- If you need a different locator or a new action, add it as a new field or method (in your own file or in the
+  project's page object); never change one that the existing tests use.
+- Every step in a feature file you write must have a step definition: reuse the existing steps, or define the missing
+  ones in a new step-definition class of your own.
+- In a feature file, write each step in plain language a business reader understands, using the step's own words
+  when the case gives them ("in words"). Never copy the action/target/locator line above into a step: locators and
+  values belong in the step definitions or the page objects.
 - Keep working until all files are written; do not stop to explain your plan.
 - {plain_values}
 - Change files only with the file_editor tool (create, view, str_replace). Create each new file with the file_editor's
@@ -88,6 +97,7 @@ what you already found: the same base class, page objects, helpers and imports.
 {cases}
 
 When these are written, reply with a short summary: which files you created or changed."""
+_USER_INSTRUCTIONS = "\n\nThe user told you during this run (this comes before the rules above):\n{instructions}"
 
 
 MOBILE_RULE = (
@@ -123,11 +133,17 @@ def build_generate_prompt(
     )
 
 
-def build_next_batch_prompt(cases: list[TestCaseSpecModel], first: int, total: int) -> str:
-    """A later message in the same conversation: the next cases (`first` is the 1-based number of the first one)."""
-    return _NEXT_BATCH_PROMPT.format(
+def build_next_batch_prompt(
+    cases: list[TestCaseSpecModel], first: int, total: int, instructions: Sequence[str] = ()
+) -> str:
+    """A later message in the same conversation: the next cases (`first` is the 1-based number of the first one).
+    `instructions`: what the user told the agents during the run; repeated so "the same rules" never override it."""
+    prompt = _NEXT_BATCH_PROMPT.format(
         first=first, last=first + len(cases) - 1, total=total, cases="\n".join(_case(case) for case in cases)
     )
+    if instructions:
+        prompt += _USER_INSTRUCTIONS.format(instructions="\n".join(f"- {text}" for text in instructions))
+    return prompt
 
 
 def _case(case: TestCaseSpecModel) -> str:
@@ -155,7 +171,9 @@ def _step(step: TestStepModel) -> str:
         parts.append(f'value="{step.value}"')
     if step.expected is not None:
         parts.append(f'expected="{step.expected}"')
-    return " ".join(parts)
+    # The step in the test data's own words: what a feature file's step or a test's comment should say.
+    words = f' (in words: "{step.text}")' if step.text else ""
+    return " ".join(parts) + words
 
 
 def _important_paths(findings: AnalyzerFindingsModel | None) -> str:
@@ -165,8 +183,8 @@ def _important_paths(findings: AnalyzerFindingsModel | None) -> str:
 
 
 BRIEFING_HEADER = (
-    "The project's own tests and helpers, exactly as they are (read-only; extend them and reuse these exact "
-    "classes and methods, do not invent new helpers or constants):\n{briefing}"
+    "The project's own tests and helpers, exactly as they are (reuse these exact classes and methods, and never call "
+    "a helper or constant that does not exist):\n{briefing}"
 )
 
 

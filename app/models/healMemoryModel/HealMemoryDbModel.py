@@ -24,7 +24,6 @@ class HealMemoryDbModel(BaseModel):
     problem: str
     fix_summary: str
     changed_files: list[str] = Field(default_factory=list)
-    reverted_files: list[str] = Field(default_factory=list)
     diff: str = ""
     blocker: str | None = None
     result: str

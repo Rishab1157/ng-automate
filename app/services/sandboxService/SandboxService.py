@@ -31,6 +31,7 @@ from openhands.workspace import DockerWorkspace
 from app.config import settings
 from app.core.exceptions import ErrorMessages, NotFoundError, SandboxError
 from app.services.projectService import ProjectStorageService
+from app.services.projectService.ProjectStorageService import RUNS_DIR
 
 if TYPE_CHECKING:
     from app.models.runModel import RunModel
@@ -140,7 +141,7 @@ class SandboxService:
         # None only in tests that do not run docker: production sandboxes always get the isolated network.
         self.network = network
         self.storage = ProjectStorageService(root=data_dir)
-        self.runs_root = self.storage.root / "runs"
+        self.runs_root = self.storage.root / RUNS_DIR
         self._network_ready = False
         self._network_lock = threading.Lock()
         _install_log_filter()
@@ -293,15 +294,13 @@ class SandboxService:
         return None
 
     def write_back_run_changes(self, run: "RunModel") -> int:
-        """Bring what a completed run's agents kept (generated tests, the healer's fixes) into the project's
-        editable copy, so the user sees them in the editor. Returns how many files were applied."""
+        """Bring everything a completed run's agents changed (generated tests, the healer's fixes) into the project's
+        editable copy, so the user sees them in the editor. Nothing is held back, also when the tests got worse: an
+        agent's change is never rolled back (the user's rule). Returns how many files were applied."""
         outputs = run.outputs
         paths = [change.path for change in outputs.generation.files] if outputs.generation else []
-        # The healer's changes only when they helped (a failed heal must not damage the user's project), never those
-        # of a heal that was undone (the run's copy already has its files back).
-        heals_kept = outputs.test_report is None or outputs.test_report.changes_kept is not False
         for attempt in outputs.test_attempts or []:
-            if attempt.heal is not None and heals_kept and not attempt.heal.undone:
+            if attempt.heal is not None:
                 paths.extend(change.path for change in attempt.heal.changes)
         if not paths:
             return 0

@@ -10,7 +10,7 @@ class HealMemoryResult(str, Enum):
     FIXED = "fixed"  # the tests passed
     CHANGED = "changed"  # a different failure came next, and no fewer tests passed: the problem worked on is gone
     NOT_FIXED = "not_fixed"  # the same failure came back
-    WORSE = "worse"  # fewer tests passed afterwards, or none ran: the heal made it worse (its changes were undone)
+    WORSE = "worse"  # fewer tests passed afterwards, or none ran: the heal made it worse
     BLOCKED = "blocked"  # the healer proved that the environment stops it
     UNFINISHED = "unfinished"  # the healer stopped (out of time, model failure) before the tests ran again
 
@@ -34,9 +34,8 @@ class HealMemoryModel(BaseModel):
     failure_evidence: list[str] = Field(default_factory=list)
     problem: str  # the text the memory was found by (embedded)
     fix_summary: str  # the healer's own summary
-    changed_files: list[str] = Field(default_factory=list)  # kept changes
-    reverted_files: list[str] = Field(default_factory=list)  # edits rolled back by the guards
-    diff: str = ""  # the kept changes, truncated
+    changed_files: list[str] = Field(default_factory=list)  # the files it changed
+    diff: str = ""  # its changes, truncated
     blocker: str | None = None
     result: HealMemoryResult
     succeeded: bool

@@ -28,6 +28,7 @@ from app.agents.TestGeneratorAgent.GeneratedTestPlacement import runnable_cases
 from app.core.exceptions import ErrorCode, ErrorMessages, NotFoundError, ValidationError
 from app.models.analyzerModel import AnalyzerFindingsModel, FactSheetModel
 from app.models.runModel import (
+    UNFINISHED_RUN_STATUSES,
     RunEventLevel,
     RunEventModel,
     RunEventType,
@@ -65,7 +66,7 @@ EVENT_DATA_DOLLAR_ESCAPE = "＄"
 
 _INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1
 
-_UNFINISHED_STATUSES = [RunStatus.QUEUED.value, RunStatus.RUNNING.value]
+_UNFINISHED_STATUSES = list(UNFINISHED_RUN_STATUSES)
 
 
 def _dump_profile_id(value: Any) -> ObjectId:

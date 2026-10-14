@@ -2,9 +2,10 @@
 
 An OpenHands agent works in the writable test sandbox with a terminal and decides itself how to fix the failure
 (edit code or configuration, install dependencies, download tools or drivers). Every change is diffed against a
-snapshot taken before; a change that breaks the guards (a test deleted, skipped or weakened; a build file that no
-longer parses; a backup copy left behind) is rolled back file by file, also when the agent stops early: no edit is
-ever left unchecked.
+snapshot taken before and kept: nothing is ever rolled back (the user's rule: the project's own framework may need
+the fix). A change that breaks the guards (a test deleted, skipped or weakened; a build file that no longer parses; a
+backup copy left behind) is reported for the user to review, also when the agent stops early: no edit is ever left
+unchecked.
 
 When the environment stops it for good, the agent says so ("BLOCKED: ...") and quotes the error. The claim is
 accepted only when that error really appeared in the output of a command it ran (and is not just the test failure
@@ -40,14 +41,18 @@ from app.models.llmModel import LlmConfigModel
 from app.models.runModel import RunEventLevel, RunEventType
 from app.models.testRunModel import TestCommandModel, TestRunResultModel
 from app.utils.AgentConversationUtils import (
+    LAST_STEPS_SUMMARY,
+    MODEL_UNREACHABLE_FROM_SANDBOX,
     AgentControl,
     EventForwarder,
     ask,
     build_condenser,
+    check_model_reachable,
     close_conversation,
+    describe_last_steps,
     secret_values,
 )
-from app.utils.LlmInstance import build_llm
+from app.utils.LlmInstance import build_llm, sandbox_base_url
 from app.utils.ProjectSnapshot import ProjectSnapshot
 
 logger = logging.getLogger(__name__)
@@ -56,7 +61,7 @@ HEALER_TOOL_NAMES = (FileEditorTool.name, TerminalTool.name, GlobTool.name, Grep
 MAX_SUMMARY_CHARS = 2000
 MAX_BLOCKER_CHARS = 1000
 NO_SUMMARY = "The healer finished without a summary."
-REVERTED_NOTICE = "Rolled back {path}: the change broke the healer's rules ({rules})"
+REVIEW_NOTICE = "Please review {path}: the healer's change looks risky ({rules}). It was kept as written"
 BLOCKER_REJECTED_NOTICE = (
     "The healer said it is blocked, but the error it quoted is not in the output of any command it ran: it goes on"
 )
@@ -110,6 +115,11 @@ class HealerAgent:
         """
         started = time.monotonic()
         paused_before = control.paused_seconds if control is not None else 0.0
+        unreachable = check_model_reachable(workspace, sandbox_base_url(self.llm_config.base_url))
+        if unreachable is not None:
+            reason = MODEL_UNREACHABLE_FROM_SANDBOX.format(reason=unreachable)
+            return HealOutcomeModel(summary=NO_SUMMARY, error=_heal_failed(reason).message,
+                                    seconds=time.monotonic() - started)
         snapshot = ProjectSnapshot.capture(project_dir)
         forwarder = EventForwarder(on_event, secret_values(self.llm_config))
         outputs = CommandOutputLog()
@@ -128,13 +138,14 @@ class HealerAgent:
         error: str | None = None
         answer = ""
         try:
-            answer = ask(conversation, prompt, deadline, _heal_failed, control)
+            answer = ask(conversation, prompt, deadline, _heal_failed, control, forwarder)
             stopped = control is not None and control.is_stopped
             if not _claims_blocked(answer) and not snapshot.changes() and not stopped:
-                answer = ask(conversation, NUDGE_MESSAGE, deadline, _heal_failed, control) or answer
+                answer = ask(conversation, NUDGE_MESSAGE, deadline, _heal_failed, control, forwarder) or answer
         except HealError as failure:
             error = failure.message
         finally:
+            last_steps = describe_last_steps(conversation)
             close_conversation(conversation)
             if not had_git_dir:
                 shutil.rmtree(snapshot.root / GIT_DIR, ignore_errors=True)
@@ -149,7 +160,9 @@ class HealerAgent:
                 rejected = True
                 forwarder.notify(AgentEvent(RunEventType.AGENT_ERROR, RunEventLevel.INFO, BLOCKER_REJECTED_NOTICE))
         paused = (control.paused_seconds - paused_before) if control is not None else 0.0
-        outcome = self._outcome(snapshot, forwarder, answer or NO_SUMMARY, error)
+        # No answer (stuck, out of steps): its last steps tell the next heal and the memory what it tried.
+        summary = answer or (LAST_STEPS_SUMMARY.format(steps=last_steps) if last_steps else NO_SUMMARY)
+        outcome = self._outcome(snapshot, forwarder, summary, error)
         return outcome.model_copy(update={
             "blocker": blocker,
             "blocker_rejected": rejected,
@@ -159,26 +172,23 @@ class HealerAgent:
     def _outcome(
         self, snapshot: ProjectSnapshot, forwarder: EventForwarder, summary: str, error: str | None
     ) -> HealOutcomeModel:
-        """What changed since the snapshot, with every change that breaks a guard rolled back."""
+        """What changed since the snapshot, all of it kept; every change that breaks a guard is reported."""
         changes = snapshot.changes()
         violations = check_changes(snapshot, changes)
-        reverted = sorted({violation.file for violation in violations})
-        for path in reverted:
-            snapshot.restore(path)
+        flagged = sorted({violation.file for violation in violations})
+        for path in flagged:
             rules = ", ".join(sorted({v.rule for v in violations if v.file == path}))
             forwarder.notify(AgentEvent(
                 RunEventType.AGENT_ERROR,
                 RunEventLevel.INFO,
-                clip(REVERTED_NOTICE.format(path=path, rules=rules), MAX_MESSAGE_CHARS),
+                clip(REVIEW_NOTICE.format(path=path, rules=rules), MAX_MESSAGE_CHARS),
                 {"file": path, "violations": [v.model_dump() for v in violations if v.file == path]},
             ))
-        kept = [change for change in changes if change.path not in reverted]
-        logger.info("Healer changed %d file(s), %d rolled back%s", len(changes), len(reverted), " (stopped early)" if error else "")
+        logger.info("Healer changed %d file(s), %d to review%s", len(changes), len(flagged), " (stopped early)" if error else "")
         return HealOutcomeModel(
             summary=summary[:MAX_SUMMARY_CHARS],
-            changes=kept,
+            changes=changes,
             violations=violations,
-            reverted_files=reverted,
             error=error,
         )
 

@@ -22,7 +22,6 @@ from app.agents.HealerAgent.HealerPrompts import describe_stack
 from app.agents.HealerAgent.HealLoopPolicy import (
     build_test_report,
     describe_test_report,
-    got_worse,
     judge_heal,
     stop_reason,
 )
@@ -45,7 +44,7 @@ from app.services.projectProfileService import ProjectProfileService
 from app.services.runService import RunService
 from app.services.sandboxService import SandboxService, SandboxSession
 from app.services.testDataService import TestDataService
-from app.utils.ProjectSnapshot import ProjectSnapshot, project_fingerprint
+from app.utils.ProjectSnapshot import project_fingerprint
 
 from .MasterState import MasterState
 from .RunControl import agent_control
@@ -79,7 +78,6 @@ HEALER_TIMED_OUT_MESSAGE = "Stopped: the healer used all of its {minutes:g} minu
 BUDGET_SLACK_SECONDS = 1.0
 MAX_DETAIL_CHARS = 300
 MEMORIES_MESSAGE = "The healer got {count} similar earlier {heals} as context ({worked} worked, {failed} did not)"
-HEAL_UNDONE_MESSAGE = "Undid the healer's changes to {files}: the tests got worse with them. The tests run again without them"
 NO_GENERATED_FILES = "the generator wrote no test files"
 MAX_REPORTED_FILES = 20
 
@@ -226,7 +224,8 @@ class MasterNodes:
         )
         await self.run_service.save_outputs(run_id, generation=outcome)
         if not outcome.files:
-            raise GenerationError(ErrorMessages.GENERATION_FAILED.format(reason=outcome.error or NO_GENERATED_FILES))
+            # The generator's error is already a full message ("The test generator stopped: ...").
+            raise GenerationError(outcome.error or ErrorMessages.GENERATION_FAILED.format(reason=NO_GENERATED_FILES))
         await self._finish_stage(state, stage, _describe_generation(outcome), **_generation_summary(outcome))
         return {"generation": outcome.model_dump(mode="json")}
 
@@ -238,8 +237,8 @@ class MasterNodes:
         One writable sandbox serves the whole loop, so what the healer installs is still there for the next run.
         Progress is saved after every run and every fix, for the UI; an interrupted loop starts over (initial_state).
         Before each heal the healer gets the organization's most similar earlier heals (memory); once the next run
-        (or the end of the loop) shows what a heal did, it is remembered, successful or not. A heal after which the
-        tests got worse is undone (its files put back as they were) and the tests run again before the next heal.
+        (or the end of the loop) shows what a heal did, it is remembered, successful or not. Nothing a heal changed is
+        ever rolled back (the user's rule), also when the tests got worse with it: the next heal works from there.
         """
         run_id, org_id = state["run_id"], state["org_id"]
         await self._start_stage(state, RunStage.RUNNING_TESTS, attempt=1)
@@ -255,7 +254,6 @@ class MasterNodes:
         reason: TestStopReason | None = None
         detail: str | None = None
         budget_left = self.heal_budget_seconds
-        before_heal: ProjectSnapshot | None = None  # the files before the last heal, to undo it
         sandbox = ExitStack()
         cancelled = False
         try:
@@ -278,8 +276,6 @@ class MasterNodes:
                 )
                 if number > 1:
                     await self._remember_heal(state, attempts[-2], attempts[-1], command, stack)
-                    if await self._undo_if_worse(state, attempts, before_heal):
-                        continue  # the files are back as they were before the heal: run the tests again
                 reason = stop_reason(attempts)
                 if reason is None and budget_left <= BUDGET_SLACK_SECONDS:
                     reason, detail = TestStopReason.TIMED_OUT, self._timed_out_message()
@@ -293,7 +289,6 @@ class MasterNodes:
                         run_id, org_id, RunEventType.AGENT_MESSAGE, _describe_memories(memories),
                         data={"memories": [_memory_summary(memory) for memory in memories]},
                     )
-                before_heal = await asyncio.to_thread(ProjectSnapshot.capture, project_dir)
                 healer = self.healer_factory(llm_config)
                 previous = [attempt.heal for attempt in attempts if attempt.heal is not None]
                 time_limit = budget_left
@@ -370,31 +365,6 @@ class MasterNodes:
             embedding_model=settings.EMBEDDING_MODEL,
         )
         await self.heal_memory_service.remember(memory_point_id(state["run_id"], attempt.number), memory)
-
-    async def _undo_if_worse(
-        self, state: MasterState, attempts: list[TestAttemptModel], before_heal: ProjectSnapshot | None
-    ) -> bool:
-        """When the run after the last heal is worse than the run before it, put every file the heal changed back as
-        it was (`before_heal`: taken just before the heal) and mark the heal undone. True when it was undone.
-
-        So the next heal starts from the better files, and a bad heal never stays on top of a good one.
-        """
-        healed = attempts[-2]
-        heal = healed.heal
-        if heal is None or not heal.changes or before_heal is None or not got_worse(healed.result, attempts[-1].result):
-            return False
-        paths = [change.path for change in heal.changes]
-        await asyncio.to_thread(_restore_files, before_heal, paths)
-        attempts[-2] = healed.model_copy(update={"heal": heal.model_copy(update={"undone": True})})
-        await self.run_service.save_outputs(state["run_id"], test_attempts=attempts)
-        await self.run_service.append_event(
-            state["run_id"],
-            state["org_id"],
-            RunEventType.AGENT_MESSAGE,
-            HEAL_UNDONE_MESSAGE.format(files=_shown_paths(paths)),
-            data={"attempt": healed.number, "undone_files": paths[:MAX_REPORTED_FILES]},
-        )
-        return True
 
     def _timed_out_message(self) -> str:
         return HEALER_TIMED_OUT_MESSAGE.format(minutes=round(self.heal_budget_seconds / 60, 1))
@@ -570,6 +540,8 @@ def _describe_generation(outcome: GenerationOutcomeModel) -> str:
         message += f" · {_count(len(outcome.unverified_locators), 'assumed locator')} to check"
     if outcome.skipped_cases:
         message += f" · {_count(len(outcome.skipped_cases), 'case')} left out"
+    if outcome.violations:
+        message += f" · {_count(len({violation.file for violation in outcome.violations}), 'risky change')} to review"
     if outcome.error:
         message += f" · {outcome.error}"
     return message
@@ -581,7 +553,7 @@ def _generation_summary(outcome: GenerationOutcomeModel) -> dict[str, Any]:
         "files": [{"path": change.path, "change": change.change} for change in outcome.files[:MAX_REPORTED_FILES]],
         "generated_cases": outcome.generated_cases,
         "skipped_cases": [case.model_dump() for case in outcome.skipped_cases],
-        "reverted_files": outcome.reverted_files[:MAX_REPORTED_FILES],
+        "violations": len(outcome.violations),
         "unverified_locators": [item.model_dump() for item in outcome.unverified_locators[:MAX_REPORTED_FILES]],
         "stopped": outcome.error is not None,
     }
@@ -629,8 +601,8 @@ def _describe_heal(outcome: HealOutcomeModel) -> str:
     else:
         paths = [change.path for change in outcome.changes]
         message = f"The healer changed {_count(len(paths), 'file')}: {_shown_paths(paths)}"
-    if outcome.reverted_files:
-        message += f" ({_count(len(outcome.reverted_files), 'forbidden edit')} rolled back)"
+    if outcome.violations:
+        message += f" ({_count(len({violation.file for violation in outcome.violations}), 'risky change')} to review)"
     return message
 
 
@@ -639,17 +611,11 @@ def _shown_paths(paths: list[str]) -> str:
     return ", ".join(paths[:3]) + (f" and {len(paths) - 3} more" if len(paths) > 3 else "")
 
 
-def _restore_files(snapshot: ProjectSnapshot, paths: list[str]) -> None:
-    for path in paths:
-        snapshot.restore(path)
-
-
 def _heal_summary(number: int, outcome: HealOutcomeModel) -> dict[str, Any]:
     return {
         "attempt": number,
         "summary": outcome.summary,
         "changes": [{"path": change.path, "change": change.change} for change in outcome.changes[:MAX_REPORTED_FILES]],
-        "reverted_files": outcome.reverted_files[:MAX_REPORTED_FILES],
         "violations": len(outcome.violations),
         "stopped": outcome.error is not None,
         "blocked": outcome.blocker is not None,
@@ -659,7 +625,7 @@ def _heal_summary(number: int, outcome: HealOutcomeModel) -> dict[str, Any]:
 
 def _worth_remembering(heal: HealOutcomeModel) -> bool:
     """A heal that did nothing at all (e.g. the model could not be reached) teaches nothing."""
-    return bool(heal.changes or heal.reverted_files or heal.blocker) or heal.summary != NO_SUMMARY
+    return bool(heal.changes or heal.blocker) or heal.summary != NO_SUMMARY
 
 
 def _describe_memories(memories: list[HealMemoryModel]) -> str:

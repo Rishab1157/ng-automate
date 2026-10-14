@@ -166,8 +166,10 @@ def test_unsafe_test_files_are_rejected(files: list[str]) -> None:
 
 
 def test_files_that_the_runner_cannot_run_are_rejected() -> None:
+    # A page object (a class without tests) is refused when the run is created, from its content (is_test_file);
+    # here only what is not a class at all.
     with pytest.raises(ValidationError):
-        resolve_test_command(_sheet("Maven", ["TestNG"]), test_files=["src/test/java/com/acme/pages/LoginPage.java"])
+        resolve_test_command(_sheet("Maven", ["TestNG"]), test_files=["src/test/resources/config.properties"])
     with pytest.raises(ValidationError):
         resolve_test_command(_sheet("Maven", ["TestNG"]), test_files=["src/test/resources/login.feature"])  # no Cucumber
     with pytest.raises(ValidationError):
@@ -206,6 +208,19 @@ def test_jvm_test_classes_need_tests_inside(content: str | None, expected: bool)
 
     assert is_test_file("src/test/java/framework/SomeTest.java", lambda: content) is expected
     assert is_test_file("tests/test_login.py", lambda: None) is True  # only JVM classes are read
+
+
+def test_a_runner_with_any_name_is_a_test_file_when_its_content_says_so() -> None:
+    # A real run: the user told the generator to use Cucumber BDD and it wrote "Runner.java"; the API refused to run
+    # it ("not a test file") although a chosen class runs by its name (-Dtest=com.demo.ngauto.Runner).
+    from app.agents.RunnerAgent.TestCommandResolver import is_test_file
+
+    runner = "@CucumberOptions(features = \"src/test/resources/features\")\npublic class Runner extends AbstractTestNGCucumberTests {}\n"
+    page = "public class LoginPage {\n  public void login() {}\n}\n"
+
+    assert is_test_file("src/test/java/com/demo/ngauto/Runner.java", lambda: runner) is True
+    assert is_test_file("src/test/java/com/demo/pages/LoginPage.java", lambda: page) is False
+    assert is_test_file("src/test/java/com/demo/ngauto/Runner.java") is False  # nothing to read: the name decides
 
 
 @pytest.mark.parametrize(("frameworks", "build", "markers", "setup"), [

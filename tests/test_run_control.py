@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from app.utils.AgentControl import USER_MESSAGE
 from app.agents.MasterAgent.RunControl import (
     DELIVERED,
     NOT_PAUSED,
@@ -59,7 +60,7 @@ async def test_message_goes_to_the_working_agent_or_waits_for_the_next() -> None
     control.agent.attach(conversation)  # the next agent starts: it gets the queued message
     await control.apply(_command(RunCommandType.MESSAGE, "use LoginPage"))
 
-    assert conversation.messages == ["too early", "use LoginPage"]
+    assert conversation.messages == [USER_MESSAGE.format(text="too early"), USER_MESSAGE.format(text="use LoginPage")]
     assert [(m[1], m[2]) for m in commands.marked] == [(RunCommandStatus.APPLIED, QUEUED), (RunCommandStatus.APPLIED, DELIVERED)]
 
 

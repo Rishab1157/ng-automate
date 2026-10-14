@@ -137,6 +137,14 @@ class Settings(BaseSettings):
     LLM_NUM_CTX: int | None = None
     LLM_THINKING: bool = True
     LLM_NATIVE_TOOL_CALLING: bool = True
+    # Limits on every model call the agents make. Without a length limit a local model caught in a repetition loop
+    # writes until its context is full, for minutes, and holds the model server (Ollama answers one request at a time)
+    # while every other agent waits silently.
+    LLM_MAX_OUTPUT_TOKENS: int = 4096
+    # Seconds one model call may take, and how often a failed call is tried again. The SDK's own defaults (300 s,
+    # 5 more tries with growing pauses) kept an agent silent for many minutes when the model server was unreachable.
+    LLM_TIMEOUT_SECONDS: int = 300
+    LLM_NUM_RETRIES: int = 2
 
     @property
     def MAX_PROJECT_BYTES(self) -> int:

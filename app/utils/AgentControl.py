@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 
 # How often a paused agent's thread checks whether the user resumed it.
 PAUSE_POLL_SECONDS = 0.5
+# How the user's messages reach an agent: marked as the user's, so the agent treats them as instructions to follow.
+USER_MESSAGE = "Message from the user running this job (follow it, together with your task): {text}"
+EARLIER_INSTRUCTIONS = (
+    "Earlier in this run the user gave these instructions; follow them, together with your task:\n{instructions}"
+)
 
 
 class AgentControl:
@@ -22,13 +27,16 @@ class AgentControl:
 
     The agent's thread attaches its conversation while it works; the run's command poller (another thread or the event
     loop) delivers messages, pauses, resumes or stops it. A message that arrives while no agent works is kept and
-    handed to the next agent that attaches.
+    handed to the next agent that attaches. Messages hold for the whole run: a new agent conversation of the run (the
+    next heal, the generator after the analyzer) first gets the instructions the user gave earlier.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._conversation: "BaseConversation | None" = None
         self._queued: list[str] = []
+        self._delivered: list[str] = []  # the user's messages some agent of the run has received, in order
+        self._informed: set[str] = set()  # conversations that have every delivered message
         self._resumed = threading.Event()
         self._resumed.set()
         self._paused_since: float | None = None
@@ -52,12 +60,24 @@ class AgentControl:
     def is_working(self) -> bool:
         return self._conversation is not None
 
+    @property
+    def instructions(self) -> list[str]:
+        """Every message the user sent during the run, in order."""
+        with self._lock:
+            return [*self._delivered, *self._queued]
+
     def attach(self, conversation: "BaseConversation") -> None:
         with self._lock:
             self._conversation = conversation
+            key = _key(conversation)
+            earlier = [] if key in self._informed else list(self._delivered)
             queued, self._queued = self._queued, []
+            self._delivered.extend(queued)
+            self._informed.add(key)
+        if earlier:
+            conversation.send_message(EARLIER_INSTRUCTIONS.format(instructions="\n".join(f"- {t}" for t in earlier)))
         for text in queued:
-            conversation.send_message(text)
+            conversation.send_message(USER_MESSAGE.format(text=text))
 
     def detach(self, conversation: "BaseConversation") -> None:
         with self._lock:
@@ -71,7 +91,8 @@ class AgentControl:
             if conversation is None:
                 self._queued.append(text)
                 return False
-        conversation.send_message(text)  # reaches the agent at its next step
+            self._delivered.append(text)
+        conversation.send_message(USER_MESSAGE.format(text=text))  # reaches the agent at its next step
         return True
 
     def pause(self) -> bool:
@@ -118,3 +139,7 @@ class AgentControl:
         waited = time.monotonic() - started
         self._paused_total += waited
         return waited
+
+
+def _key(conversation: "BaseConversation") -> str:
+    return str(getattr(conversation, "id", "") or id(conversation))

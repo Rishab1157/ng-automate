@@ -20,15 +20,14 @@ class UnverifiedLocatorModel(BaseModel):
 
 class GenerationOutcomeModel(BaseModel):
     summary: str  # the agent's own short explanation of what it wrote
-    files: list[FileChangeModel] = Field(default_factory=list)  # files written or changed, kept after the guards
+    files: list[FileChangeModel] = Field(default_factory=list)  # every file it added, changed or deleted (all kept)
     generated_cases: list[str] = Field(default_factory=list)  # ids of the cases given to the agent
     skipped_cases: list[SkippedCaseModel] = Field(default_factory=list)
-    violations: list[GuardViolationModel] = Field(default_factory=list)
-    reverted_files: list[str] = Field(default_factory=list)
+    violations: list[GuardViolationModel] = Field(default_factory=list)  # risky changes, kept, for the user to review
     # Whether the tests build after the generator's work (its stack's compile/collect step). None: not checked (the
     # stack has no such step, or the project did not build before the generator started).
     builds: bool | None = None
     # Locators the generator assumed and marked in the files it wrote (NGAUTO-UNVERIFIED).
     unverified_locators: list[UnverifiedLocatorModel] = Field(default_factory=list)
-    # Why the generator stopped early (model unreachable, out of time, ...); its files were still checked.
+    # Why the generator stopped early (model unreachable, out of time, ...); its files are still checked and kept.
     error: str | None = None

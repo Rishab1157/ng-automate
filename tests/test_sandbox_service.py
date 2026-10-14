@@ -757,7 +757,7 @@ def test_the_test_sandbox_sees_the_test_data_read_only_beside_the_project(
     assert not any(volume.endswith(":/workspace/test-data:ro") for volume in without["volumes"])
 
 
-def test_what_a_completed_run_kept_is_written_back_to_the_project(service: SandboxService) -> None:
+def test_what_a_completed_run_changed_is_written_back_to_the_project(service: SandboxService) -> None:
     from types import SimpleNamespace
 
     _store_archive(service, make_zip({**SAMPLE_FILES, "old.txt": "remove me"}))
@@ -773,9 +773,8 @@ def test_what_a_completed_run_kept_is_written_back_to_the_project(service: Sandb
         project_id=PROJECT_ID,
         outputs=SimpleNamespace(
             generation=SimpleNamespace(files=[change("src/test/java/GeneratedTest.java")]),
-            test_attempts=[SimpleNamespace(heal=SimpleNamespace(changes=[change("pom.xml"), change("old.txt")], undone=False)),
+            test_attempts=[SimpleNamespace(heal=SimpleNamespace(changes=[change("pom.xml"), change("old.txt")])),
                            SimpleNamespace(heal=None)],
-            test_report=SimpleNamespace(changes_kept=True),
         ),
     )
 
@@ -789,12 +788,12 @@ def test_what_a_completed_run_kept_is_written_back_to_the_project(service: Sandb
     assert not (working / "logs").exists()  # only what the agents changed comes back
 
 
-def test_a_heal_that_did_not_help_never_reaches_the_project(service: SandboxService) -> None:
+def test_a_heal_that_made_the_tests_worse_still_reaches_the_project(service: SandboxService) -> None:
+    # Nothing is ever rolled back (the user's rule): the project gets every change, as the run left it.
     from types import SimpleNamespace
 
     _store_archive(service, make_zip(SAMPLE_FILES))
     project_dir = service.prepare_project_dir(PROJECT_ID, RUN_ID)
-    original_pom = (service.storage.working_dir(PROJECT_ID) / "pom.xml").read_text()
     (project_dir / "src/test/java/GeneratedTest.java").write_text("class GeneratedTest {}")  # the generator
     (project_dir / "pom.xml").write_text("<project>broken by the healer</project>")  # the tests no longer ran
     change = lambda path: SimpleNamespace(path=path)  # noqa: E731
@@ -804,41 +803,14 @@ def test_a_heal_that_did_not_help_never_reaches_the_project(service: SandboxServ
         outputs=SimpleNamespace(
             generation=SimpleNamespace(files=[change("src/test/java/GeneratedTest.java")]),
             test_attempts=[SimpleNamespace(heal=SimpleNamespace(changes=[change("pom.xml")])), SimpleNamespace(heal=None)],
-            test_report=SimpleNamespace(changes_kept=False),
         ),
     )
 
     applied = service.write_back_run_changes(run)  # type: ignore[arg-type]
 
     working = service.storage.working_dir(PROJECT_ID)
-    assert applied == 1  # only the generated test
-    assert (working / "pom.xml").read_text() == original_pom
-
-
-def test_the_files_of_an_undone_heal_are_not_written_back(service: SandboxService) -> None:
-    from types import SimpleNamespace
-
-    _store_archive(service, make_zip(SAMPLE_FILES))
-    project_dir = service.prepare_project_dir(PROJECT_ID, RUN_ID)
-    (project_dir / "pom.xml").write_text("<project>healed</project>")  # the first heal, which helped
-    change = lambda path: SimpleNamespace(path=path)  # noqa: E731
-    # The second heal made the tests worse: its edits were undone, so the run's copy has no trace of them.
-    undone = SimpleNamespace(changes=[change("pom.xml"), change("src/test/java/Junk.java")], undone=True)
-    run = SimpleNamespace(
-        id=RUN_ID,
-        project_id=PROJECT_ID,
-        outputs=SimpleNamespace(
-            generation=None,
-            test_attempts=[SimpleNamespace(heal=SimpleNamespace(changes=[change("pom.xml")], undone=False)),
-                           SimpleNamespace(heal=undone), SimpleNamespace(heal=None)],
-            test_report=SimpleNamespace(changes_kept=True),
-        ),
-    )
-
-    applied = service.write_back_run_changes(run)  # type: ignore[arg-type]
-
-    assert applied == 1  # pom.xml, as the first heal left it
-    assert (service.storage.working_dir(PROJECT_ID) / "pom.xml").read_text() == "<project>healed</project>"
+    assert applied == 2
+    assert (working / "pom.xml").read_text() == "<project>broken by the healer</project>"
 
 
 def test_write_back_never_leaves_the_project(service: SandboxService, tmp_path: Path) -> None:

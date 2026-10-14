@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from openhands.sdk.event import ActionEvent, AgentErrorEvent, MessageEvent, ObservationEvent
+from openhands.sdk.event.condenser import Condensation
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.event.error_classification import FailureKind
 from openhands.sdk.llm import content_to_str
@@ -39,6 +40,7 @@ MODEL_QUOTA_EXCEEDED = "the usage quota or budget of the model is used up"
 MODEL_RATE_LIMITED = "the model is rate limited, try again later"
 MODEL_MISCONFIGURED = "the model is not available or the model connection is misconfigured"
 MODEL_UNREACHABLE = "the model could not be reached, try again later"
+CONDENSED_MESSAGE = "The agent summarized {count} earlier steps to stay within the model's context"
 
 _FAILURE_REASONS: dict[FailureKind, str] = {
     FailureKind.AUTH: MODEL_AUTH_FAILED,
@@ -70,6 +72,8 @@ def map_openhands_event(event: Any) -> AgentEvent | None:
             return _map_conversation_error(event)
         if isinstance(event, MessageEvent) and event.source == "agent":
             return _map_agent_message(event)
+        if isinstance(event, Condensation):
+            return _map_condensation(event)
     except Exception:
         # Called from the SDK's event thread: a mapping bug must cost one timeline entry, not the run.
         logger.warning("Could not map agent event %s", type(event).__name__, exc_info=True)
@@ -124,6 +128,15 @@ def _map_agent_error(event: AgentErrorEvent) -> AgentEvent:
         clip(f"{event.tool_name} error: {first_line}", MAX_SUMMARY_CHARS),
         {"tool": event.tool_name, "error": clip(event.error, MAX_OUTPUT_CHARS)},
     )
+
+
+def _map_condensation(event: Condensation) -> AgentEvent:
+    """The condenser replaced older steps with a summary (the history was nearing the model's context size)."""
+    data: dict[str, Any] = {"forgotten_events": len(event.forgotten_event_ids)}
+    if event.summary:
+        data["summary"] = clip(event.summary, MAX_OUTPUT_CHARS)
+    message = CONDENSED_MESSAGE.format(count=len(event.forgotten_event_ids))
+    return AgentEvent(RunEventType.AGENT_MESSAGE, RunEventLevel.INFO, message, data)
 
 
 def _map_conversation_error(event: ConversationErrorEvent) -> AgentEvent:

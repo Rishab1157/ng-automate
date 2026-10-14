@@ -66,7 +66,10 @@ def build_llm(config: LlmConfigModel) -> "LLM":
 
     options: dict[str, Any] = {}
     if config.num_ctx:
-        options["litellm_extra_body"] = {"options": {"num_ctx": config.num_ctx}}
+        # Ollama's own options; its length limit goes here too, as these options replace the ones LiteLLM would send.
+        options["litellm_extra_body"] = {
+            "options": {"num_ctx": config.num_ctx, "num_predict": settings.LLM_MAX_OUTPUT_TOKENS}
+        }
     if not config.thinking:
         # None = send no reasoning setting at all (the SDK default "high" turns thinking on).
         options["reasoning_effort"] = None
@@ -77,6 +80,9 @@ def build_llm(config: LlmConfigModel) -> "LLM":
         base_url=sandbox_base_url(config.base_url),
         api_mode=config.api_mode,
         native_tool_calling=config.native_tool_calling,
+        max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+        timeout=settings.LLM_TIMEOUT_SECONDS,
+        num_retries=settings.LLM_NUM_RETRIES,
         **options,
     )
 

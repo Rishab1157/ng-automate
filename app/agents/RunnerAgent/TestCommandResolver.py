@@ -200,8 +200,12 @@ def _gradle(selector: str | None, has_wrapper: bool, files: list[str] | None = N
 
 
 def _jvm_class(path: str) -> str:
-    """src/test/java/com/acme/LoginTest.java -> com.acme.LoginTest (just the class name outside a java/kotlin root)."""
-    if not _JVM_TEST_NAME.search(path.rsplit("/", 1)[-1]):
+    """src/test/java/com/acme/LoginTest.java -> com.acme.LoginTest (just the class name outside a java/kotlin root).
+
+    Any class name: whether the chosen class holds tests was decided from its content (is_test_file, when the run was
+    created), and -Dtest / --tests run a class by its name, not by Surefire's default name patterns.
+    """
+    if not path.endswith((".java", ".kt")):
         raise ValidationError(NOT_A_TEST_FILE.format(path=path))
     parts = path.rsplit(".", 1)[0].split("/")
     roots = [index for index, part in enumerate(parts[:-1]) if part in ("java", "kotlin")]
@@ -211,16 +215,18 @@ def _jvm_class(path: str) -> str:
 def is_test_file(path: str, read: Callable[[], str | None] | None = None) -> bool:
     """A file a test runner picks up (project-relative, "/"-separated): what users can choose to run.
 
-    With `read` (the file's text, read only when needed), a Java/Kotlin class counts only when it has tests or is a
-    test runner and is not abstract: a base class such as BaseTest is named like a test but runs nothing.
+    With `read` (the file's text, read only when needed), a Java/Kotlin class counts when it has tests or is a test
+    runner and is not abstract, whatever its name: a base class such as BaseTest is named like a test but runs
+    nothing, and a Cucumber runner named "Runner" runs scenarios (a chosen file runs by its class name, -Dtest or
+    --tests, not by Surefire's default name patterns). Without `read`, Surefire's default names decide.
     """
     parts = path.split("/")
     name = parts[-1]
-    if _JVM_TEST_NAME.search(name):
+    if name.endswith((".java", ".kt")):
         if not any(part in _JVM_TEST_DIRS for part in parts[:-1]):
             return False
         if read is None:
-            return True
+            return bool(_JVM_TEST_NAME.search(name))
         text = read()
         return text is not None and bool(_JVM_TEST_MARKERS.search(text)) and not _ABSTRACT_CLASS.search(text)
     return bool(_OTHER_TEST_NAME.search(name))

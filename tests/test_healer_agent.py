@@ -21,10 +21,16 @@ from openhands.tools.terminal import TerminalObservation, TerminalTool
 from pydantic import SecretStr
 
 from app.agents.AnalyzerAgent.AgentEventMapper import AgentEvent
-from app.agents.HealerAgent.HealerAgent import BLOCKER_REJECTED_NOTICE, HEALER_TOOL_NAMES, NO_SUMMARY, HealerAgent
+from app.agents.HealerAgent.HealerAgent import (
+    BLOCKER_REJECTED_NOTICE,
+    HEALER_TOOL_NAMES,
+    NO_SUMMARY,
+    REVIEW_NOTICE,
+    HealerAgent,
+)
 from app.agents.HealerAgent.HealerPrompts import MAX_OUTPUT_IN_PROMPT, build_heal_prompt
 from app.models.analyzerModel import Confidence, FactModel, FactSheetModel, FactSource
-from app.models.healerModel import GuardViolationModel, HealOutcomeModel
+from app.models.healerModel import FileChangeModel, GuardViolationModel, HealOutcomeModel
 from app.models.llmModel import LlmConfigModel
 from app.models.runModel import RunEventType
 from app.models.testRunModel import FailureClassificationModel, FailureKind, TestCommandModel, TestRunResultModel
@@ -192,7 +198,7 @@ def test_legit_fix_is_kept_and_reported(conversation: Callable[..., list[FakeCon
     assert outcome.summary == "Fixed the TestNG version in pom.xml."
     assert [(c.path, c.change) for c in outcome.changes] == [("pom.xml", "modified")]
     assert "+  <testng.version>7.10.2</testng.version>" in outcome.changes[0].diff
-    assert outcome.violations == [] and outcome.reverted_files == []
+    assert outcome.violations == []
     [fake] = created
     assert fake.kwargs["max_iteration_per_run"] == 9
     assert fake.kwargs["visualizer"] is None
@@ -201,49 +207,53 @@ def test_legit_fix_is_kept_and_reported(conversation: Callable[..., list[FakeCon
     assert {tool.name for tool in fake.agent.tools} == set(HEALER_TOOL_NAMES)
 
 
-def test_removed_assertion_is_rolled_back_but_other_fixes_stay(
+def test_removed_assertion_is_kept_and_reported(
     conversation: Callable[..., list[FakeConversation]], tmp_path: Path
 ) -> None:
+    # Nothing is ever rolled back (the user's rule): the user is asked to review the change instead.
     project = _project(tmp_path)
     test_file = project / TEST_FILE
+    weakened = TEST_SOURCE.replace('        Assert.assertEquals(title(), "Dashboard");\n', "")
 
     def cheat() -> None:
         (project / "pom.xml").write_text("<project>\n  <testng.version>7.10.2</testng.version>\n</project>\n", encoding="utf-8")
-        test_file.write_text(TEST_SOURCE.replace('        Assert.assertEquals(title(), "Dashboard");\n', ""), encoding="utf-8")
+        test_file.write_text(weakened, encoding="utf-8")
 
     conversation(edit=cheat)
     events: list[AgentEvent] = []
 
     outcome = _heal(project, events)
 
-    assert test_file.read_text(encoding="utf-8") == TEST_SOURCE
-    assert outcome.reverted_files == [TEST_FILE]
+    assert test_file.read_text(encoding="utf-8") == weakened
     assert [v.rule for v in outcome.violations] == ["assertion_removed"]
-    assert [c.path for c in outcome.changes] == ["pom.xml"]
+    assert [c.path for c in outcome.changes] == ["pom.xml", TEST_FILE]
     [notice] = [e for e in events if e.type == RunEventType.AGENT_ERROR]
-    assert TEST_FILE in notice.message and "assertion_removed" in notice.message
+    assert notice.message == REVIEW_NOTICE.format(path=TEST_FILE, rules="assertion_removed")
 
 
-def test_skipped_test_is_rolled_back(conversation: Callable[..., list[FakeConversation]], tmp_path: Path) -> None:
+def test_skipped_test_is_kept_and_reported(conversation: Callable[..., list[FakeConversation]], tmp_path: Path) -> None:
     project = _project(tmp_path)
     test_file = project / TEST_FILE
-    conversation(edit=lambda: test_file.write_text(TEST_SOURCE.replace("@Test", "@Test(enabled = false)"), encoding="utf-8"))
+    skipped = TEST_SOURCE.replace("@Test", "@Test(enabled = false)")
+    conversation(edit=lambda: test_file.write_text(skipped, encoding="utf-8"))
 
     outcome = _heal(project)
 
-    assert test_file.read_text(encoding="utf-8") == TEST_SOURCE
+    assert test_file.read_text(encoding="utf-8") == skipped
     assert "test_skipped" in {v.rule for v in outcome.violations}
-    assert outcome.changes == []
+    assert [c.path for c in outcome.changes] == [TEST_FILE]
 
 
-def test_deleted_test_file_is_restored(conversation: Callable[..., list[FakeConversation]], tmp_path: Path) -> None:
+def test_deleted_test_file_stays_deleted_and_is_reported(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
     project = _project(tmp_path)
     conversation(edit=lambda: (project / TEST_FILE).unlink())
 
     outcome = _heal(project)
 
-    assert (project / TEST_FILE).read_text(encoding="utf-8") == TEST_SOURCE
-    assert outcome.reverted_files == [TEST_FILE]
+    assert not (project / TEST_FILE).exists()
+    assert [(c.path, c.change) for c in outcome.changes] == [(TEST_FILE, "deleted")]
     assert {v.rule for v in outcome.violations} == {"assertion_removed", "test_removed"}
 
 
@@ -299,18 +309,16 @@ def test_edits_made_before_the_agent_stopped_are_still_checked(
 ) -> None:
     project = _project(tmp_path)
     test_file = project / TEST_FILE
+    ignored = TEST_SOURCE.replace("@Test", "@Ignore @Test")
     timeout = ConversationRunError("c-1", TimeoutError("run timed out"))
-    conversation(
-        edit=lambda: test_file.write_text(TEST_SOURCE.replace("@Test", "@Ignore @Test"), encoding="utf-8"),
-        answer=None,
-        error=timeout,
-    )
+    conversation(edit=lambda: test_file.write_text(ignored, encoding="utf-8"), answer=None, error=timeout)
 
     outcome = _heal(project)
 
     assert outcome.error == "The healer stopped: the agent did not finish in time"
-    assert test_file.read_text(encoding="utf-8") == TEST_SOURCE
-    assert outcome.reverted_files == [TEST_FILE]
+    assert test_file.read_text(encoding="utf-8") == ignored
+    assert [c.path for c in outcome.changes] == [TEST_FILE]
+    assert "test_skipped" in {v.rule for v in outcome.violations}
 
 
 def test_the_heal_deadline_comes_from_the_healer_timeout(
@@ -319,9 +327,9 @@ def test_the_heal_deadline_comes_from_the_healer_timeout(
     deadlines: list[float] = []
     real_ask = healer_module.ask
 
-    def recording_ask(conversation: Any, message: str, deadline: float, failure: Any, control: Any = None) -> str:
+    def recording_ask(conversation: Any, message: str, deadline: float, failure: Any, *rest: Any) -> str:
         deadlines.append(deadline - time.monotonic())
-        return real_ask(conversation, message, deadline, failure, control)
+        return real_ask(conversation, message, deadline, failure, *rest)
 
     monkeypatch.setattr(healer_module, "ask", recording_ask)
     conversation()
@@ -331,21 +339,20 @@ def test_the_heal_deadline_comes_from_the_healer_timeout(
     assert 110 < deadlines[0] <= 120
 
 
-def test_broken_build_file_is_rolled_back(conversation: Callable[..., list[FakeConversation]], tmp_path: Path) -> None:
+def test_broken_build_file_is_kept_and_reported(conversation: Callable[..., list[FakeConversation]], tmp_path: Path) -> None:
     project = _project(tmp_path)
     pom = project / "pom.xml"
-    original = pom.read_text(encoding="utf-8")
-    conversation(edit=lambda: pom.write_text("003cproject003e\n  <testng.version>7.10.2</testng.version>\n", encoding="utf-8"))
+    broken = "003cproject003e\n  <testng.version>7.10.2</testng.version>\n"
+    conversation(edit=lambda: pom.write_text(broken, encoding="utf-8"))
 
     outcome = _heal(project)
 
-    assert pom.read_text(encoding="utf-8") == original
-    assert outcome.reverted_files == ["pom.xml"]
+    assert pom.read_text(encoding="utf-8") == broken
     assert [v.rule for v in outcome.violations] == ["build_file_broken"]
-    assert outcome.changes == []
+    assert [c.path for c in outcome.changes] == ["pom.xml"]
 
 
-def test_backup_copy_is_removed_and_git_repo_made_by_the_agent_is_deleted(
+def test_backup_copy_is_kept_and_reported_and_git_repo_made_by_the_agent_is_deleted(
     conversation: Callable[..., list[FakeConversation]], tmp_path: Path
 ) -> None:
     project = _project(tmp_path)
@@ -359,9 +366,9 @@ def test_backup_copy_is_removed_and_git_repo_made_by_the_agent_is_deleted(
 
     outcome = _heal(project)
 
-    assert not (project / "pom.xml.backup").exists()
-    assert not (project / ".git").exists()
-    assert outcome.reverted_files == ["pom.xml.backup"]
+    assert (project / "pom.xml.backup").exists()
+    assert not (project / ".git").exists()  # the agent's own tool, never part of the project
+    assert [c.path for c in outcome.changes] == ["pom.xml.backup"]
     assert [v.rule for v in outcome.violations] == ["stray_file"]
 
 
@@ -371,9 +378,8 @@ def test_earlier_fixes_are_described_in_the_prompt(
     created = conversation()
     earlier = HealOutcomeModel(
         summary="Changed the TestNG version to 7.12.0.",
-        changes=[],
+        changes=[FileChangeModel(path="pom.xml", change="modified")],
         violations=[GuardViolationModel(file="pom.xml", rule="build_file_broken", line="003cdependency003e")],
-        reverted_files=["pom.xml"],
     )
     project = _project(tmp_path)
 
@@ -383,7 +389,10 @@ def test_earlier_fixes_are_described_in_the_prompt(
 
     prompt = created[0].messages[0]
     assert "Earlier fixes in this run did not make the tests pass" in prompt
-    assert "Fix 1: Changed the TestNG version to 7.12.0. Rolled back pom.xml (build_file_broken)." in prompt
+    assert (
+        "Fix 1: Changed the TestNG version to 7.12.0. Changed: pom.xml. Broke the rules in pom.xml (build_file_broken)."
+        in prompt
+    )
 
 
 def test_agent_that_changed_nothing_is_nudged_once(conversation: Callable[..., list[FakeConversation]], tmp_path: Path) -> None:
@@ -444,9 +453,9 @@ def test_the_time_limit_sets_the_deadline_and_the_working_time_is_measured(
     deadlines: list[float] = []
     real_ask = healer_module.ask
 
-    def recording_ask(conversation: Any, message: str, deadline: float, failure: Any, control: Any = None) -> str:
+    def recording_ask(conversation: Any, message: str, deadline: float, failure: Any, *rest: Any) -> str:
         deadlines.append(deadline - time.monotonic())
-        return real_ask(conversation, message, deadline, failure, control)
+        return real_ask(conversation, message, deadline, failure, *rest)
 
     monkeypatch.setattr(healer_module, "ask", recording_ask)
     project = _project(tmp_path)

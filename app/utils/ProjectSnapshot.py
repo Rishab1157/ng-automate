@@ -1,12 +1,14 @@
-"""A copy of a project's text files, to see exactly what an agent changed and to undo single files.
+"""A copy of a project's text files, to see exactly what an agent changed.
 
 Taken on the host copy of the project before an agent edits it. Build outputs, dependency folders and binary or
-very large files are left out: agents rebuild those, and they are not something to review or restore.
+very large files are left out: agents rebuild those, and they are not something to review. Nothing is ever put back
+from a snapshot: an agent's change is never rolled back (the user's rule).
 """
 
 import difflib
 import hashlib
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,9 +17,16 @@ from app.utils.ArchiveUtils import SKIPPED_DIRS
 
 # Build and tool outputs on top of the archive's skipped folders.
 SNAPSHOT_SKIPPED_DIRS = SKIPPED_DIRS | {"build", "dist", "out", "bin", "obj", "ngauto-results", ".pytest_cache", "allure-results"}
+# The temporary file an agent's file editor writes next to a file while saving it (".LoginTest.java.u1d6m2yl.tmp"):
+# never a project file, only there for a moment (or left behind by a crash mid-write).
+_IN_FLIGHT_WRITE = re.compile(r"^\..+\.[a-z0-9_]{8}\.tmp$")
 MAX_FILE_BYTES = 1024 * 1024
 MAX_FILES = 20_000
 MAX_DIFF_CHARS = 20_000
+
+
+def is_in_flight_write(name: str) -> bool:
+    return _IN_FLIGHT_WRITE.match(name) is not None
 
 
 @dataclass(frozen=True)
@@ -36,18 +45,6 @@ class ProjectSnapshot:
 
     def content(self, path: str) -> str | None:
         return self.files.get(path)
-
-    def restore(self, path: str) -> None:
-        """Put one file back as it was in the snapshot (delete it if it did not exist then)."""
-        target = (self.root / path).resolve()
-        if not target.is_relative_to(self.root):
-            raise ValueError(f"Not a project path: {path!r}")
-        original = self.files.get(path)
-        if original is None:
-            target.unlink(missing_ok=True)
-            return
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(original, encoding="utf-8", newline="")
 
 
 def project_fingerprint(project_dir: Path) -> str:
@@ -80,7 +77,7 @@ def _read_text_files(root: Path) -> dict[str, str]:
         dirs[:] = [d for d in dirs if d not in SNAPSHOT_SKIPPED_DIRS and not (Path(current) / d).is_symlink()]
         for name in names:
             path = Path(current) / name
-            if path.is_symlink():
+            if path.is_symlink() or is_in_flight_write(name):
                 continue
             try:
                 if path.stat().st_size > MAX_FILE_BYTES:

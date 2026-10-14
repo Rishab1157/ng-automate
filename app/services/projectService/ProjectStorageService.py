@@ -4,6 +4,7 @@
 - project/    the editable copy: what the editor shows and saves, and what every run starts from
 - test-data/  the original test-data files, kept apart from the project (never inside it)
 
+Each run works on its own copy in <DATA_DIR>/runs/<run_id>/ (see SandboxService).
 Moving to S3 later only changes this class.
 """
 
@@ -12,10 +13,13 @@ import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+from bson import ObjectId
+
 from app.config import settings
 from app.core.exceptions import ErrorMessages, PayloadTooLargeError
 from app.utils.ArchiveUtils import extract_archive
 
+RUNS_DIR = "runs"
 MAX_STORED_NAME_CHARS = 150
 # Characters Windows and most tools do not accept in a file name.
 _UNSAFE_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -100,6 +104,12 @@ class ProjectStorageService:
 
     def delete(self, project_id: str) -> None:
         shutil.rmtree(self._project_dir(project_id), ignore_errors=True)
+
+    def delete_runs(self, run_ids: list[str]) -> None:
+        """Remove the folders runs left behind (a run's own copy of the project; a finished run usually removed it)."""
+        for run_id in run_ids:
+            if ObjectId.is_valid(run_id):
+                shutil.rmtree(self.root / RUNS_DIR / run_id, ignore_errors=True)
 
     def _project_dir(self, project_id: str) -> Path:
         return self.root / "projects" / project_id

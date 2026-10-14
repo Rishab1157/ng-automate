@@ -1,6 +1,7 @@
 from .RunDbModel import RunCreateDbModel, RunEventCreateDbModel
 from .RunMapper import RunMapper
 from .RunModel import (
+    UNFINISHED_RUN_STATUSES,
     RunErrorModel,
     RunEventLevel,
     RunEventModel,
@@ -16,6 +17,7 @@ from .RunModel import (
 )
 
 __all__ = [
+    "UNFINISHED_RUN_STATUSES",
     "RunCreateDbModel",
     "RunEventCreateDbModel",
     "RunMapper",

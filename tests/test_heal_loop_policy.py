@@ -6,6 +6,7 @@ from app.agents.HealerAgent.HealLoopPolicy import (
     build_test_report,
     describe_test_report,
     failure_signature,
+    got_better,
     got_worse,
     same_failure_streak,
     stop_reason,
@@ -122,24 +123,15 @@ def test_there_is_no_fix_count_limit() -> None:
     assert stop_reason(attempts, SAME_FAILURE_LIMIT) is None
 
 
-def _undone(*paths: str) -> HealOutcomeModel:
-    return _fix(*paths).model_copy(update={"undone": True})
-
-
 CODE_ERROR = _result(FailureKind.TEST_CODE_FAILURE, ["CartTest.remove: NullPointerException"], passed=11, failed=1)
 
 
-def test_a_run_of_undone_changes_does_not_break_the_streak() -> None:
-    # The healer keeps making it worse; each time its changes are undone and the tests run again on the same files.
-    attempts = [
-        _attempt(1, CODE_ERROR, _fix("CartTest.java")),
-        _attempt(2, CODE_ERROR, _undone("pom.xml")),
-        _attempt(3, BUILD),  # what the undone changes did: those files are gone
-        _attempt(4, CODE_ERROR),
-    ]
+def test_a_heal_that_made_it_worse_stays_and_the_healer_goes_on_from_there() -> None:
+    # Nothing is ever rolled back (the user's rule): the next heal works on the worse failure.
+    attempts = [_attempt(1, CODE_ERROR, _fix("pom.xml")), _attempt(2, BUILD)]
 
-    assert same_failure_streak(attempts) == 3
-    assert stop_reason(attempts, SAME_FAILURE_LIMIT) == TestStopReason.NO_PROGRESS
+    assert got_worse(CODE_ERROR, BUILD)
+    assert stop_reason(attempts, SAME_FAILURE_LIMIT) is None
 
 
 @pytest.mark.parametrize(
@@ -157,18 +149,52 @@ def test_worse_means_fewer_tests_pass_or_none_run(before: TestRunResultModel, af
     assert got_worse(before, after) is worse
 
 
-def test_report_leaves_out_the_changes_that_were_undone() -> None:
+def _build(*errors: str) -> TestRunResultModel:
+    return _result(FailureKind.BUILD_FAILURE, list(errors))
+
+
+BASE_ERROR = "[ERROR] /workspace/project/src/test/java/com/demo/base/BaseTest.java:[22,48] ';' expected"
+TEST_ERROR = "[ERROR] /workspace/project/src/test/java/com/demo/ngauto/LoginTest.java:[20,2] reached end of file while parsing"
+
+
+def test_a_build_with_fewer_errors_and_no_new_one_is_better() -> None:
+    # As in a real run: the first heal fixed the base class, one generated test still did not compile. The same
+    # "COMPILATION ERROR" header made that look like no progress, and the fix was thrown away.
+    before, after = _build(BASE_ERROR, TEST_ERROR), _build(TEST_ERROR.replace("[20,2]", "[21,2]"))  # its line moved
+    attempts = [_attempt(1, before, _fix("src/test/java/com/demo/base/BaseTest.java")), _attempt(2, after)]
+
+    assert got_better(before, after) and not got_worse(before, after)
+    assert same_failure_streak(attempts) == 1
+
+
+def test_the_same_failure_with_more_tests_passing_is_progress_not_a_streak() -> None:
+    # A real run: Cucumber scenarios went from 0 to 1 passing with the same failure, and the loop stopped as "no
+    # progress".
+    none_pass = _result(FailureKind.TEST_CODE_FAILURE, ["Steps.login: NullPointerException"], failed=3)
+    one_passes = _result(FailureKind.TEST_CODE_FAILURE, ["Steps.login: NullPointerException"], passed=1, failed=2)
+    attempts = [_attempt(1, none_pass, _fix("Steps.java")), _attempt(2, none_pass, _fix("Steps.java")),
+                _attempt(3, one_passes)]
+
+    assert same_failure_streak(attempts) == 1
+    assert stop_reason(attempts, SAME_FAILURE_LIMIT) is None
+
+
+def test_a_build_that_only_gained_errors_is_worse() -> None:
+    assert got_worse(_build(TEST_ERROR), _build(TEST_ERROR, BASE_ERROR))
+    # Other errors instead of the old ones: neither better nor worse.
+    assert not got_worse(_build(TEST_ERROR), _build(BASE_ERROR)) and not got_better(_build(TEST_ERROR), _build(BASE_ERROR))
+
+
+def test_report_lists_every_change_also_when_the_tests_got_worse() -> None:
     attempts = [
-        _attempt(1, DEPENDENCY, _fix("pom.xml")),
-        _attempt(2, CODE_ERROR, _undone("pom.xml", "src/test/java/Junk.java")),
+        _attempt(1, CODE_ERROR, _fix("pom.xml")),
+        _attempt(2, BUILD, _fix("src/test/java/Junk.java")),
         _attempt(3, BUILD),
-        _attempt(4, CODE_ERROR),
     ]
 
     report = build_test_report(attempts, TestStopReason.NO_PROGRESS)
 
-    assert report.changed_files == ["pom.xml"]
-    assert report.changes_kept is True  # the tests run now, where they did not before the first fix
+    assert report.changed_files == ["pom.xml", "src/test/java/Junk.java"]
 
 
 def test_no_attempts_is_a_bug() -> None:
@@ -204,9 +230,7 @@ def test_report_counts_the_last_run_and_every_kept_change() -> None:
             [_attempt(1, DEPENDENCY, _fix("pom.xml")), _attempt(2, DEPENDENCY, _fix("pom.xml")), _attempt(3, DEPENDENCY)],
             TestStopReason.NO_PROGRESS,
             None,
-            # The same problem after both fixes: they did not help, so they do not reach the project.
-            "Stopped: no progress, the same dependency problem keeps coming back after the healer's fixes"
-            " · the healer's changes were not kept: the tests did not get better with them",
+            "Stopped: no progress, the same dependency problem keeps coming back after the healer's fixes",
         ),
         (
             [_attempt(1, _result(FailureKind.ENVIRONMENT_FAILURE))],
@@ -230,32 +254,3 @@ def test_report_counts_the_last_run_and_every_kept_change() -> None:
 )
 def test_report_lines(attempts: list[TestAttemptModel], reason: TestStopReason, detail: str | None, expected: str) -> None:
     assert describe_test_report(build_test_report(attempts, reason, detail)) == expected
-
-
-@pytest.mark.parametrize(
-    ("attempts", "kept"),
-    [
-        # The tests passed after the fix: keep it.
-        ([_attempt(1, DEPENDENCY, _fix("pom.xml")), _attempt(2, _result(FailureKind.PASSED, passed=2))], True),
-        # The build works again and tests ran (some fail their checks): progress, keep it.
-        ([_attempt(1, DEPENDENCY, _fix("pom.xml")), _attempt(2, _result(FailureKind.TEST_FAILURE, passed=1, failed=1))], True),
-        # After the fix the tests no longer ran at all: it made things worse.
-        ([_attempt(1, _result(FailureKind.TEST_CODE_FAILURE, failed=3)), _attempt(2, _result(FailureKind.UNKNOWN))], False),
-        # Fewer tests pass than before the first fix.
-        ([_attempt(1, _result(FailureKind.LOCATOR_FAILURE, passed=3, failed=1), _fix("Page.java")),
-          _attempt(2, _result(FailureKind.TEST_FAILURE, passed=1, failed=3))], False),
-        # The loop stopped right after a heal: nothing checked it.
-        ([_attempt(1, DEPENDENCY, _fix("pom.xml"))], False),
-        # As in a real run: the same test still fails and as many pass (the healer added a dependency and a 30 s
-        # pause to the test). Nothing got better: none of it reaches the project.
-        ([_attempt(1, _result(FailureKind.LOCATOR_FAILURE, passed=11, failed=1), _fix("pom.xml", "CartTest.java")),
-          _attempt(2, _result(FailureKind.LOCATOR_FAILURE, passed=11, failed=1))], False),
-        # More tests pass after the fix (one locator fixed, another still wrong): progress, keep it.
-        ([_attempt(1, _result(FailureKind.LOCATOR_FAILURE, passed=10, failed=2), _fix("CartPage.java")),
-          _attempt(2, _result(FailureKind.LOCATOR_FAILURE, passed=11, failed=1))], True),
-    ],
-)
-def test_the_healers_changes_are_kept_only_when_they_helped(attempts: list, kept: bool) -> None:
-    from app.agents.HealerAgent.HealLoopPolicy import heal_changes_helped
-
-    assert heal_changes_helped(attempts) is kept

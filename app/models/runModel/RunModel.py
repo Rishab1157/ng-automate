@@ -18,6 +18,10 @@ class RunStatus(str, Enum):
     CANCELLED = "cancelled"  # stopped by a user
 
 
+# A run in one of these states still works on its project's files.
+UNFINISHED_RUN_STATUSES = (RunStatus.QUEUED.value, RunStatus.RUNNING.value)
+
+
 class RunMode(str, Enum):
     """What a run does after the project profile is ready."""
 
@@ -112,11 +116,8 @@ class TestReportModel(BaseModel):
     failed: int
     errors: int
     skipped: int
-    # Every file the healer changed and kept, over all its attempts.
+    # Every file the healer changed, over all its attempts: all of them go into the project's files.
     changed_files: list[str] = Field(default_factory=list)
-    # Whether those changes go into the project's files: only when the tests got no worse after them (see
-    # HealLoopPolicy.heal_changes_helped). None: the healer changed nothing (or a run from before this rule).
-    changes_kept: bool | None = None
 
 
 class RunOutputsModel(BaseModel):

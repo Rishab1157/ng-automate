@@ -1,8 +1,9 @@
 from .ProjectFileResponseDto import FileNodeDTO, ProjectFileContentResponseDTO, ProjectFileTreeResponseDTO, RunFilesResponseDTO
-from .ProjectResponseDto import ProjectArchiveDTO, ProjectGitOriginDTO, ProjectResponseDTO
+from .ProjectResponseDto import ProjectArchiveDTO, ProjectDeletedResponseDTO, ProjectGitOriginDTO, ProjectResponseDTO
 
 __all__ = [
     "ProjectResponseDTO",
+    "ProjectDeletedResponseDTO",
     "ProjectArchiveDTO",
     "ProjectGitOriginDTO",
     "FileNodeDTO",

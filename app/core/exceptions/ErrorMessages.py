@@ -63,6 +63,7 @@ class ErrorMessages:
     FILE_NOT_EDITABLE = "Only text files of the project can be edited here (test data and binary files are read-only)"
     FILE_TOO_LARGE_TO_EDIT = "The file is larger than {limit_kb} KB: too large to edit here"
     PROJECT_BUSY = "A run is using this project: its files can be edited again when the run has finished"
+    PROJECT_BUSY_DELETE = "A run is using this project: stop it, or wait until it has finished, then delete the project"
 
     # Sandbox
     SANDBOX_FAILED = "The sandbox could not be started: {reason}"

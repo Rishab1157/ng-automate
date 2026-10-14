@@ -1,10 +1,13 @@
 import os
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 from bson import ObjectId
 from fastapi.testclient import TestClient
+from pymongo import MongoClient
 
+from app.config import settings
 from app.permissions.ngAutomatePermission import NGAUTOMATE_ACCESS_ALL_ORGS
 from tests.conftest import make_zip
 
@@ -196,3 +199,55 @@ def test_missing_branch_is_reported(
 
     assert response.status_code == 422
     assert "was not found" in _error(response)["message"]
+
+
+# ---------- delete ----------
+
+def _add_run(mongo: MongoClient, project_id: str, org_id: str, status: str) -> str:
+    run_id = ObjectId()
+    mongo[settings.MONGO_DATABASE]["runs"].insert_one(
+        {"_id": run_id, "project_id": ObjectId(project_id), "org_id": ObjectId(org_id), "status": status}
+    )
+    return str(run_id)
+
+
+def test_deleting_a_project_hides_it_and_removes_its_files(
+    client: TestClient, auth_headers: AuthHeaders, org_id: str, mongo: MongoClient
+) -> None:
+    headers = auth_headers(org_id)
+    project_id = _upload(client, headers).json()["id"]
+    folder = Path(settings.DATA_DIR) / "projects" / project_id
+    run_folder = Path(settings.DATA_DIR) / "runs" / _add_run(mongo, project_id, org_id, "completed")
+    (run_folder / "project").mkdir(parents=True)
+    assert folder.is_dir()
+
+    response = client.delete(f"{BASE}/{project_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "Project deleted successfully"}
+    assert not folder.exists() and not run_folder.exists()
+    assert client.get(f"{BASE}/{project_id}", headers=headers).status_code == 404
+    assert project_id not in [p["id"] for p in client.get(f"{BASE}/", headers=headers).json()]
+    # Soft delete, as in QXcel: the document stays, marked inactive.
+    assert mongo[settings.MONGO_DATABASE]["projects"].find_one({"_id": ObjectId(project_id)})["is_active"] is False
+
+
+def test_a_project_a_run_works_on_is_not_deleted(
+    client: TestClient, auth_headers: AuthHeaders, org_id: str, mongo: MongoClient
+) -> None:
+    headers = auth_headers(org_id)
+    project_id = _upload(client, headers).json()["id"]
+    _add_run(mongo, project_id, org_id, "running")
+
+    response = client.delete(f"{BASE}/{project_id}", headers=headers)
+
+    assert response.status_code == 409
+    assert _error(response)["code"] == "PROJECT_BUSY"
+    assert client.get(f"{BASE}/{project_id}", headers=headers).status_code == 200
+
+
+def test_another_orgs_project_cannot_be_deleted(client: TestClient, auth_headers: AuthHeaders, org_id: str) -> None:
+    project_id = _upload(client, auth_headers(org_id)).json()["id"]
+
+    assert client.delete(f"{BASE}/{project_id}", headers=auth_headers(str(ObjectId()))).status_code == 404
+    assert client.get(f"{BASE}/{project_id}", headers=auth_headers(org_id)).status_code == 200

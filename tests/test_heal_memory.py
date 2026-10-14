@@ -461,7 +461,7 @@ def test_a_heal_that_made_it_worse_reaches_the_healer_as_a_warning_without_its_d
     prompt = build_heal_prompt(LOCATOR, COMMAND, FACT_SHEET, memories=[worse])
 
     assert (worse.result, worse.succeeded) == (HealMemoryResult.WORSE, False)
-    assert "- made it worse: fewer tests passed afterwards (or none ran), so it was undone" in prompt
+    assert "- made it worse: fewer tests passed afterwards (or none ran) (" in prompt
     assert "Changed: pom.xml" in prompt
     assert "+<version>7.10.2</version>" not in prompt  # nothing to copy
 

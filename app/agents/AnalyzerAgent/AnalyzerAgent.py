@@ -35,14 +35,16 @@ from app.models.analyzerModel import AnalyzerFindingsModel, Confidence, FactMode
 from app.models.llmModel import LlmConfigModel
 from app.models.runModel import RunEventLevel, RunEventType
 from app.utils.AgentConversationUtils import (
+    MODEL_UNREACHABLE_FROM_SANDBOX,
     AgentControl,
     EventForwarder,
     ask,
     build_condenser,
+    check_model_reachable,
     close_conversation,
     secret_values,
 )
-from app.utils.LlmInstance import build_llm
+from app.utils.LlmInstance import build_llm, sandbox_base_url
 from app.utils.StructuredOutput import complete_json
 
 logger = logging.getLogger(__name__)
@@ -129,6 +131,9 @@ class AnalyzerAgent:
         An answer is strictly validated. If it is not usable, the agent corrects it (up to `repair_attempts` rounds,
         each told the exact error), then a schema-constrained formatter is the last resort.
         """
+        unreachable = check_model_reachable(workspace, sandbox_base_url(self.llm_config.base_url))
+        if unreachable is not None:
+            raise _analysis_failed(MODEL_UNREACHABLE_FROM_SANDBOX.format(reason=unreachable))
         forwarder = EventForwarder(on_event, secret_values(self.llm_config))
         conversation = Conversation(
             agent=self._build_agent(),
@@ -141,7 +146,7 @@ class AnalyzerAgent:
         )
         deadline = time.monotonic() + settings.RUN_TIMEOUT_SECONDS
         try:
-            answer = ask(conversation, build_analysis_prompt(fact_sheet), deadline, _analysis_failed, control)
+            answer = ask(conversation, build_analysis_prompt(fact_sheet), deadline, _analysis_failed, control, forwarder)
             reason = _usable_or_reason(answer)
             if reason is None:
                 return parse_findings(answer)
@@ -150,7 +155,7 @@ class AnalyzerAgent:
             for attempt in range(1, self.repair_attempts + 1):
                 logger.info("Analyzer answer not usable (%s); repair attempt %d", reason, attempt)
                 forwarder.notify(_notice(REPAIR_NOTICE.format(reason=reason, attempt=attempt, attempts=self.repair_attempts)))
-                answer = ask(conversation, build_repair_prompt(reason), deadline, _analysis_failed, control)
+                answer = ask(conversation, build_repair_prompt(reason), deadline, _analysis_failed, control, forwarder)
                 reason = _usable_or_reason(answer)
                 if reason is None:
                     return parse_findings(answer)

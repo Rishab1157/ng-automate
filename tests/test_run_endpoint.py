@@ -270,11 +270,10 @@ def test_tests_endpoint_lists_every_attempt_with_the_healer_diffs(
     client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
 ) -> None:
     run_id = _create_run(client, auth_headers(org_id), seed_project(mongo, org_id)).json()["id"]
-    heal = {"summary": "Set TestNG to 7.10.2", "violations": [], "reverted_files": [],
+    heal = {"summary": "Set TestNG to 7.10.2", "violations": [],
             "changes": [{"path": "pom.xml", "change": "modified", "diff": "-99.0.0\n+7.10.2"}]}
     report = {"outcome": "passed", "stop_reason": "passed", "detail": None, "runs": 2, "heals": 1, "total": 1,
-              "passed": 1, "failed": 0, "errors": 0, "skipped": 0, "changed_files": ["pom.xml"],
-              "changes_kept": True}
+              "passed": 1, "failed": 0, "errors": 0, "skipped": 0, "changed_files": ["pom.xml"]}
     _db(mongo).runs.update_one({"_id": ObjectId(run_id)}, {"$set": {
         "outputs.test_attempts": [_attempt_doc(1, "dependency_failure", heal), _attempt_doc(2, "passed")],
         "outputs.test_report": report,

@@ -16,6 +16,7 @@ from app.agents.TestGeneratorAgent.TestGeneratorAgent import (
     GENERATOR_TOOL_NAMES,
     NUDGE_MESSAGE,
     NUDGE_NOTICE,
+    REVIEW_NOTICE,
     TestGeneratorAgent,
 )
 from app.config import settings
@@ -134,24 +135,30 @@ def test_generated_feature_is_kept_as_written(conversation: Callable[..., list[F
     assert {tool.name for tool in fake.agent.tools} == set(GENERATOR_TOOL_NAMES)
 
 
-def test_weakening_an_existing_step_or_deleting_a_file_is_rolled_back(
+def test_weakening_an_existing_step_or_deleting_a_file_is_kept_and_reported(
     conversation: Callable[..., list[FakeConversation]], tmp_path: Path
 ) -> None:
+    # Nothing is ever rolled back (the user's rule): the changes stay, and the user is asked to review them.
     project = _project(tmp_path)
+    weakened = EXISTING_STEPS.replace("        Assert.assertEquals(driver.getTitle(), expected);\n", "")
 
     def misbehave() -> None:
-        (project / STEPS).write_text(EXISTING_STEPS.replace("        Assert.assertEquals(driver.getTitle(), expected);\n", ""), encoding="utf-8")
+        (project / STEPS).write_text(weakened, encoding="utf-8")
         (project / "pom.xml").unlink()
 
     conversation(edit=misbehave)
+    events: list[AgentEvent] = []
 
-    outcome = _generate(project)
+    outcome = _generate(project, events=events)
 
-    assert (project / STEPS).read_text(encoding="utf-8") == EXISTING_STEPS
-    assert (project / "pom.xml").is_file()
-    assert outcome.reverted_files == ["pom.xml", STEPS]
-    assert {v.rule for v in outcome.violations} == {"assertion_removed", "existing_code_changed", "file_deleted"}
-    assert outcome.files == []
+    assert (project / STEPS).read_text(encoding="utf-8") == weakened
+    assert not (project / "pom.xml").exists()
+    assert {(v.file, v.rule) for v in outcome.violations} == {("pom.xml", "file_deleted"), (STEPS, "assertion_removed")}
+    assert [(f.path, f.change) for f in outcome.files] == [("pom.xml", "deleted"), (STEPS, "modified")]
+    assert [e.message for e in events if e.type == RunEventType.AGENT_ERROR] == [
+        REVIEW_NOTICE.format(path="pom.xml", rules="file_deleted"),
+        REVIEW_NOTICE.format(path=STEPS, rules="assertion_removed"),
+    ]
 
 
 def test_stopping_early_keeps_what_was_written(conversation: Callable[..., list[FakeConversation]], tmp_path: Path) -> None:
@@ -217,29 +224,42 @@ def test_generator_that_never_writes_is_nudged_a_limited_number_of_times(
     assert created[0].messages[1:] == [NUDGE_MESSAGE] * settings.GENERATOR_NUDGES
 
 
-def test_changing_an_existing_locator_is_rolled_back_but_new_code_is_kept(
+def test_changes_to_the_projects_own_files_are_kept(
     conversation: Callable[..., list[FakeConversation]], tmp_path: Path
 ) -> None:
+    # The new tests may need the framework changed (a locator, a step, a dependency). In a real run, rolling such
+    # changes back after the build check left generated tests that no longer compiled: they all stay.
     project = _project(tmp_path)
     page = project / "src/test/java/com/demo/pages/LoginPage.java"
     page.parent.mkdir(parents=True)
     original = 'public class LoginPage {\n  private final By username = By.id("username");\n}\n'
     page.write_text(original, encoding="utf-8")
+    pom = project / "pom.xml"
+    pom.write_text("<project>\n  <dependencies>\n  </dependencies>\n</project>\n", encoding="utf-8")
+    dependency = "    <dependency><groupId>io.cucumber</groupId><artifactId>cucumber-java</artifactId></dependency>\n"
+    with_dependency = pom.read_text(encoding="utf-8").replace("  </dependencies>", dependency + "  </dependencies>")
     grown = EXISTING_STEPS.replace("}\n}\n", '}\n\n    @When("the user opens {string}")\n    public void open(String url) { driver.get(url); }\n}\n')
+    new_steps = "src/test/java/com/demo/steps/ngauto/CartSteps.java"
+    changed_page = original.replace('By.id("username")', 'By.id("user-name")')
 
     def edit() -> None:
-        page.write_text(original.replace('By.id("username")', 'By.id("user-name")'), encoding="utf-8")
+        page.write_text(changed_page, encoding="utf-8")
         (project / STEPS).write_text(grown, encoding="utf-8")
+        pom.write_text(with_dependency, encoding="utf-8")
+        (project / new_steps).parent.mkdir(parents=True)
+        (project / new_steps).write_text("public class CartSteps {}\n", encoding="utf-8")
 
     conversation(edit=edit)
 
     outcome = _generate(project)
 
-    assert page.read_text(encoding="utf-8") == original
+    assert page.read_text(encoding="utf-8") == changed_page
     assert (project / STEPS).read_text(encoding="utf-8") == grown
-    assert outcome.reverted_files == ["src/test/java/com/demo/pages/LoginPage.java"]
-    assert [v.rule for v in outcome.violations] == ["existing_code_changed"]
-    assert [f.path for f in outcome.files] == [STEPS]
+    assert pom.read_text(encoding="utf-8") == with_dependency
+    assert outcome.violations == []
+    assert [f.path for f in outcome.files] == [
+        "pom.xml", "src/test/java/com/demo/pages/LoginPage.java", STEPS, new_steps,
+    ]
 
 
 def _cases(count: int) -> TestDataSetModel:

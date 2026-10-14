@@ -1,11 +1,14 @@
-"""Edits the healer may not make: they would hide a failure instead of fixing it, or leave the project worse.
+"""Edits that look like hiding a failure instead of fixing it, or that leave the project worse: found and reported.
 
 The healer fixes technical problems (dependencies, compile errors, configuration). Removing assertions, deleting
 or skipping tests, commenting checks out, or swallowing failures makes a red build green without fixing anything,
-so every change it makes to a test file is checked here and rejected when it does any of that.
+so every change an agent makes to a test file is checked here, and each one that does any of that is reported.
 
 Small models also make clumsy edits: a build file that no longer parses (e.g. XML mangled by a sed command) or
-backup copies left behind. Those are caught here too, so they can be rolled back.
+backup copies left behind. Those are reported too.
+
+Nothing is ever rolled back (the user's rule): the project's own framework may need the agents' changes, so every
+change stays, and the user reviews what is reported here.
 """
 
 import json
@@ -76,16 +79,10 @@ def check_test_integrity(path: str, before: str, after: str) -> list[GuardViolat
 
 
 def check_changes(
-    snapshot: ProjectSnapshot,
-    changes: list[FileChangeModel],
-    *,
-    allow_deletes: bool = True,
-    additions_only: bool = False,
+    snapshot: ProjectSnapshot, changes: list[FileChangeModel], *, allow_deletes: bool = True
 ) -> list[GuardViolationModel]:
-    """Every guard, over everything an agent changed since `snapshot`. A deleted file counts as every line removed.
-
-    `additions_only`: existing files may only gain lines (the test generator adds code; it never edits what is there).
-    """
+    """Every guard, over everything an agent changed since `snapshot`. A deleted file counts as every line removed;
+    without `allow_deletes`, deleting a file is reported on its own."""
     violations: list[GuardViolationModel] = []
     for change in changes:
         before = snapshot.content(change.path) or ""
@@ -94,19 +91,11 @@ def check_changes(
             violations.extend(check_new_file(change.path))
         elif change.change == "modified":
             violations.extend(check_build_file(change.path, before, after))
-            if additions_only:
-                violations.extend(check_only_additions(change.path, before, after))
         elif not allow_deletes:
             violations.append(_violation(change.path, "file_deleted", change.path))
             continue
         violations.extend(check_test_integrity(change.path, before, after))
     return violations
-
-
-def check_only_additions(path: str, before: str, after: str) -> list[GuardViolationModel]:
-    """An existing file whose lines were changed or removed (moving or re-indenting a line is fine)."""
-    removed, _ = _diff_lines(before, after)
-    return [_violation(path, "existing_code_changed", removed[0])] if removed else []
 
 
 def check_new_file(path: str) -> list[GuardViolationModel]:

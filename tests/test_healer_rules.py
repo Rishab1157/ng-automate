@@ -3,7 +3,6 @@ import pytest
 from app.agents.HealerAgent.HealerGuards import (
     check_build_file,
     check_new_file,
-    check_only_additions,
     check_test_integrity,
     is_test_file,
 )
@@ -147,17 +146,3 @@ def test_other_files_are_not_parsed() -> None:
 )
 def test_stray_files(path: str, stray: bool) -> None:
     assert bool(check_new_file(path)) is stray
-
-
-
-def test_only_additions_allows_new_lines_and_moves() -> None:
-    before = "import a;\nimport b;\nclass X {\n}\n"
-    after = "import b;\nimport a;\nimport c;\nclass X {\n  void y() {}\n}\n"
-
-    assert check_only_additions("X.java", before, after) == []
-
-
-def test_only_additions_catches_a_changed_line() -> None:
-    [violation] = check_only_additions("LoginPage.java", 'By.id("username");\n', 'By.id("user-name");\n')
-
-    assert (violation.rule, violation.line) == ("existing_code_changed", 'By.id("username");')

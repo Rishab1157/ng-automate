@@ -32,5 +32,7 @@ class ProjectCreateDbModel(BaseModel):
     status: str
     archive: ArchiveDbModel
     git: GitOriginDbModel | None = None
+    # False once the project is deleted (soft delete, as in QXcel): it no longer shows anywhere.
+    is_active: bool = True
     created_at: datetime
     updated_at: datetime

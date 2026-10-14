@@ -2,11 +2,13 @@
 
 - EventForwarder: the conversation callback; maps SDK events for the run timeline, masks secrets, never raises.
 - AgentControl: lets the user steer the agent that is working (messages, pause, resume, stop). Thread-safe.
-- ask(): send one message, let the agent work within a deadline, return its final answer; waits while paused.
+- ask(): send one message, let the agent work within a deadline, return its final answer; waits while paused, and
+  says in the timeline when the agent makes no progress (waiting for the model, or a long command).
 - close_conversation(), build_condenser(), secret_values().
 """
 
 import logging
+import shlex
 import time
 from collections.abc import Callable
 from typing import Any
@@ -17,7 +19,9 @@ from openhands.sdk.conversation.base import BaseConversation
 from openhands.sdk.conversation.exceptions import ConversationRunError
 from openhands.sdk.conversation.impl.remote_conversation import RemoteConversation
 from openhands.sdk.conversation.response_utils import get_agent_final_response
+from openhands.sdk.event import ActionEvent
 from openhands.sdk.event.error_classification import classify_error
+from openhands.sdk.workspace import BaseWorkspace
 
 from app.agents.AnalyzerAgent.AgentEventMapper import (
     AGENT_TIMED_OUT,
@@ -28,6 +32,7 @@ from app.agents.AnalyzerAgent.AgentEventMapper import (
 )
 from app.core.exceptions import NgAutomateException
 from app.models.llmModel import LlmConfigModel
+from app.models.runModel import RunEventLevel, RunEventType
 from app.utils.AgentControl import AgentControl
 
 logger = logging.getLogger(__name__)
@@ -41,6 +46,27 @@ SECRET_MASK = "***"
 # run() calls after a resume: one may return at once while a step from before the pause is still finishing.
 MAX_RESUMES = 50
 _PAUSED_STATUS = "paused"
+# A remote run is waited for in slices of this many seconds. Between slices a stop, the deadline and the agent's
+# progress are checked: one long wait kept polling a removed sandbox (logging "connection refused" every few seconds)
+# until its deadline, up to an hour after the run was stopped.
+RUN_SLICE_SECONDS = 30.0
+# After this long without a new agent step the timeline says what the agent waits for, then again as often.
+NO_PROGRESS_NOTICE_SECONDS = 60.0
+WAITING_FOR_MODEL = (
+    "No new step for {minutes} min: the agent is waiting for the model's answer (the model server may be busy with "
+    "another request, or slow on a long prompt)"
+)
+WAITING_FOR_ACTION = "No new step for {minutes} min: the agent is still running {action}"
+# describe_last_steps(): how many of the last steps, and how much of a failed step's error.
+MAX_LAST_STEPS = 6
+MAX_STEP_DETAIL_CHARS = 200
+LAST_STEPS_SUMMARY = "The agent gave no summary. Its last steps: {steps}"
+MODEL_UNREACHABLE_FROM_SANDBOX = (
+    "the sandbox cannot reach the model server ({reason}); check the network or VPN between Docker and the model server"
+)
+# check_model_reachable(): seconds curl may take, and its exit code when the image has no curl.
+MODEL_CHECK_SECONDS = 10
+CURL_NOT_FOUND = 127
 
 
 class EventForwarder:
@@ -76,12 +102,14 @@ def ask(
     deadline: float,
     failure: Callable[[str], NgAutomateException],
     control: AgentControl | None = None,
+    forwarder: EventForwarder | None = None,
 ) -> str:
     """Send one message, let the agent work, return its final answer ("" when it gave none).
 
     Stopping at a step limit is not a failure (the agent may still have answered); any other run error raises
     `failure(reason)` with a short, safe reason. With `control`, the user can message, pause and resume the agent:
     while paused, this waits (the pause does not count against the deadline) and then lets the agent continue.
+    With `forwarder`, the timeline says when the agent makes no progress and what it is waiting for.
     """
     conversation.send_message(message)
     if control is not None:
@@ -89,7 +117,7 @@ def ask(
     try:
         resumes = 0
         while True:
-            _run(conversation, deadline, failure)
+            _run(conversation, deadline, failure, control, forwarder)
             if control is None or _status(conversation) != _PAUSED_STATUS or control.is_stopped:
                 break
             # The user paused the agent (or a step from before the pause just finished): wait, then go on.
@@ -103,11 +131,16 @@ def ask(
     return get_agent_final_response(conversation.state.events)
 
 
-def _run(conversation: BaseConversation, deadline: float, failure: Callable[[str], NgAutomateException]) -> None:
+def _run(
+    conversation: BaseConversation,
+    deadline: float,
+    failure: Callable[[str], NgAutomateException],
+    control: AgentControl | None = None,
+    forwarder: EventForwarder | None = None,
+) -> None:
     try:
         if isinstance(conversation, RemoteConversation):
-            # Without a timeout a remote run keeps polling for up to an hour, even after its sandbox is gone.
-            conversation.run(timeout=max(deadline - time.monotonic(), 1.0))
+            _run_remote(conversation, deadline, control, forwarder)
         else:
             conversation.run()
     except ConversationRunError as error:
@@ -115,6 +148,88 @@ def _run(conversation: BaseConversation, deadline: float, failure: Callable[[str
             logger.warning("Agent conversation failed", exc_info=True)
             raise failure(_run_failure_reason(error)) from error
         logger.info("Agent stopped at a step limit; reading what it answered")
+
+
+def _run_remote(
+    conversation: RemoteConversation,
+    deadline: float,
+    control: AgentControl | None,
+    forwarder: EventForwarder | None,
+) -> None:
+    """Start the remote run once, then wait for it in slices (RUN_SLICE_SECONDS). Raises ConversationRunError like
+    run(): when the run fails, at the deadline, or, once the user stopped the run, as soon as a slice ends without the
+    agent finishing (its sandbox may be gone, so nothing else would end the wait).
+
+    The later slices use the SDK's own wait (the one run() uses after posting /run): posting /run again blocks behind
+    a long model call on the agent server until the request times out, which failed a real generation.
+    """
+    wait = getattr(conversation, "_wait_for_run_completion", None)
+    armed = getattr(conversation, "_run_armed", None)
+    if wait is None or armed is None:  # another SDK version: one wait until the deadline, as before
+        conversation.run(timeout=max(deadline - time.monotonic(), 1.0))
+        return
+    since = len(conversation.state.events)
+    watch = _ProgressWatch(conversation)
+    started = False
+    while True:
+        timeout = max(min(deadline - time.monotonic(), RUN_SLICE_SECONDS), 1.0)
+        try:
+            if not started:
+                conversation.run(timeout=timeout)
+            else:
+                armed.set()  # as run() does: the run's final state snapshot now counts as its end
+                try:
+                    wait(1.0, timeout, since)
+                finally:
+                    armed.clear()
+            return
+        except ConversationRunError as error:
+            still_working = isinstance(error.original_exception, TimeoutError) and error.conversation_error is None
+            if not still_working or time.monotonic() >= deadline or (control is not None and control.is_stopped):
+                raise
+        started = True
+        if forwarder is not None:
+            forwarder.notify(watch.notice())
+
+
+class _ProgressWatch:
+    """Notices an agent that has made no new step for a while, and says what it is waiting for."""
+
+    def __init__(self, conversation: BaseConversation) -> None:
+        self.conversation = conversation
+        self.count = self._count()
+        self.since = self.noticed = time.monotonic()
+
+    def notice(self) -> AgentEvent | None:
+        now, count = time.monotonic(), self._count()
+        if count != self.count:
+            self.count, self.since, self.noticed = count, now, now
+            return None
+        if now - self.since < NO_PROGRESS_NOTICE_SECONDS or now - self.noticed < NO_PROGRESS_NOTICE_SECONDS:
+            return None
+        self.noticed = now
+        minutes = round((now - self.since) / 60)
+        last = self._last()
+        action = map_openhands_event(last) if isinstance(last, ActionEvent) else None
+        message = (
+            WAITING_FOR_ACTION.format(minutes=minutes, action=action.message)
+            if action is not None
+            else WAITING_FOR_MODEL.format(minutes=minutes)
+        )
+        return AgentEvent(RunEventType.AGENT_MESSAGE, RunEventLevel.INFO, message, {"waiting_seconds": round(now - self.since)})
+
+    def _count(self) -> int:
+        try:
+            return len(self.conversation.state.events)
+        except Exception:
+            return 0
+
+    def _last(self) -> Any:
+        try:
+            events = self.conversation.state.events
+            return events[-1] if len(events) else None
+        except Exception:
+            return None
 
 
 def _status(conversation: BaseConversation) -> str | None:
@@ -139,6 +254,60 @@ def build_condenser(llm: LLM, num_ctx: int | None) -> LLMSummarizingCondenser:
 def secret_values(config: LlmConfigModel) -> tuple[str, ...]:
     key = config.api_key.get_secret_value() if config.api_key else ""
     return (key,) if len(key) >= MIN_SECRET_LENGTH else ()
+
+
+def describe_last_steps(conversation: BaseConversation, limit: int = MAX_LAST_STEPS) -> str:
+    """The agent's last steps as "action -> result", the same step repeated shown once with its count, e.g.
+    "str_replace BaseTest.java -> file_editor failed: No replacement was performed ... (x15)". "" when it took none.
+
+    For an agent that ends without an answer (stuck, out of steps): what it tried still reaches the next attempt and
+    the healer's memory, instead of "no summary".
+    """
+    try:
+        events = list(conversation.state.events)
+    except Exception:
+        return ""
+    steps: list[list[Any]] = []  # [text, count]
+    action: AgentEvent | None = None
+    for event in events:
+        mapped = map_openhands_event(event)
+        if mapped is None:
+            continue
+        if mapped.type == RunEventType.AGENT_ACTION:
+            action = mapped
+        elif mapped.type == RunEventType.AGENT_OBSERVATION and action is not None:
+            result = mapped.message
+            if mapped.data.get("error"):
+                detail = next((line.strip() for line in str(mapped.data.get("output", "")).splitlines()
+                               if line.strip() and not line.startswith("[An error")), "")
+                result += f": {detail[:MAX_STEP_DETAIL_CHARS]}" if detail else ""
+            text = f"{action.message} -> {result}"
+            action = None
+            if steps and steps[-1][0] == text:
+                steps[-1][1] += 1
+            else:
+                steps.append([text, 1])
+    return "; ".join(text + (f" (x{count})" if count > 1 else "") for text, count in steps[-limit:])
+
+
+def check_model_reachable(workspace: BaseWorkspace, base_url: str | None) -> str | None:
+    """None when the sandbox reaches the model server (any HTTP answer counts), else curl's reason (e.g. "Failed to
+    connect to 192.168.3.90 port 11435"). Without this, an agent whose sandbox cannot reach the model retries its call
+    silently for minutes while the run looks busy. Hosted models (no base URL) and images without curl are not checked.
+    """
+    if not base_url:
+        return None
+    try:
+        result = workspace.execute_command(
+            f"curl -sS -m {MODEL_CHECK_SECONDS} -o /dev/null {shlex.quote(base_url)}", timeout=MODEL_CHECK_SECONDS + 10
+        )
+    except Exception:
+        logger.warning("Could not check whether the sandbox reaches the model server", exc_info=True)
+        return None
+    if result.exit_code in (0, CURL_NOT_FOUND):
+        return None
+    lines = [line.strip() for line in f"{result.stderr}\n{result.stdout}".splitlines() if line.strip()]
+    return lines[-1][:MAX_STEP_DETAIL_CHARS] if lines else f"curl exited with {result.exit_code}"
 
 
 def _stopped_at_a_limit(error: ConversationRunError) -> bool:

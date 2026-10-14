@@ -33,3 +33,7 @@ class ProjectResponseDTO(BaseModel):
     @classmethod
     def from_model(cls, project: ProjectModel) -> "ProjectResponseDTO":
         return cls.model_validate(project.model_dump())
+
+
+class ProjectDeletedResponseDTO(BaseModel):
+    message: str
