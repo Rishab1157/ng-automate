@@ -58,6 +58,12 @@ COPY ngauto-entrypoint.sh ngauto-find-elements /usr/local/bin/
 RUN sed -i 's/\r$//' /usr/local/bin/ngauto-entrypoint.sh /usr/local/bin/ngauto-find-elements \
     && chmod 755 /usr/local/bin/ngauto-entrypoint.sh /usr/local/bin/ngauto-find-elements
 
+# Clearer file_editor errors (python/ngauto_editor_hints.py): a failed str_replace tells the agent how to fix its
+# call, worked out from the file. The agent server is a frozen program: it finds the module through
+# OH_EXTRA_PYTHON_PATH and imports it at start (ngauto-entrypoint.sh adds --import-modules).
+COPY python/ngauto_editor_hints.py /opt/ngauto/python/
+ENV OH_EXTRA_PYTHON_PATH=/opt/ngauto/python
+
 # noVNC focuses its screen when it connects. Without preventScroll the browser scrolls the page that embeds the live
 # view down to it, so NG Automate's step pages jumped away from what the user was reading.
 RUN sed -i 's/UI\.rfb\.focus();/UI.rfb.focus({ preventScroll: true });/' /usr/share/novnc/app/ui.js
