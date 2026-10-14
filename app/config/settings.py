@@ -40,13 +40,15 @@ class Settings(BaseSettings):
     # Cloned when a git connection has no branch. A repo without it falls back to its own default branch.
     GIT_DEFAULT_BRANCH: str = "main"
 
-    # Sandbox: one Docker container per agent session, running the OpenHands agent server
-    SANDBOX_IMAGE: str = "ghcr.io/openhands/agent-server:1.53.0-python"
+    # Sandbox: one Docker container per agent session, running OUR OpenHands agent server, built from the vendored SDK
+    # in third_party/ (docker compose --profile build build agent-server): every change made there runs in sandboxes.
+    SANDBOX_IMAGE: str = "ng-automate/agent-server:1.53.0-source"
     SANDBOX_CPUS: float = 2.0
     SANDBOX_MEMORY_MB: int = 4096
     SANDBOX_STARTUP_TIMEOUT_SECONDS: int = 180
-    # Writable sandboxes (runner, healer, test generator) need build tools: docker/sandbox-test/Dockerfile.
-    SANDBOX_TEST_IMAGE: str = "ng-automate/sandbox-test:1.53.0"
+    # Writable sandboxes (runner, healer, test generator) need build tools: docker/sandbox-test/Dockerfile, on the
+    # image above. (ng-automate/sandbox-test:1.53.0 is the earlier one, on OpenHands' prebuilt agent server.)
+    SANDBOX_TEST_IMAGE: str = "ng-automate/sandbox-test:1.53.0-source"
     # Keep Maven/npm/pip downloads between runs, one cache per organization (never shared across orgs).
     SANDBOX_BUILD_CACHES: bool = True
     # Docker network for every sandbox, created with inter-container traffic turned off: a sandbox reaches the

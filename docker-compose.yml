@@ -1,6 +1,7 @@
 # NG Automate's own dependencies, in one place:
 #   docker compose up -d                                 # MongoDB (our database) and Qdrant (the healer's memory)
-#   docker compose --profile build build sandbox-test    # the sandbox image the runner, healer and generator use
+#   docker compose --profile build build agent-server    # our OpenHands agent server, from the vendored SDK in third_party/
+#   docker compose --profile build build sandbox-test    # the sandbox image the runner, healer and generator use (on it)
 #
 # Values come from .env (compose reads it for the ${...} below). Ports are bound to this machine only.
 # Not here, on purpose:
@@ -36,8 +37,21 @@ services:
       - qdrant-data:/qdrant/storage
 
   # Build only: a sandbox is started per agent session by the app, never by compose.
+  # The agent server runs from the vendored SDK's source (OpenHands' own image recipe, its `source` target), so every
+  # change in third_party/ runs in the sandboxes. The analyzer's read-only sandbox uses it as it is (SANDBOX_IMAGE).
+  agent-server:
+    image: ng-automate/agent-server:1.53.0-source
+    build:
+      context: third_party/software-agent-sdk
+      dockerfile: openhands-agent-server/openhands/agent_server/docker/Dockerfile
+      target: source
+      args:
+        INSTALL_CAPABILITIES: browser # Chromium; no VS Code or Docker inside the sandbox
+        INSTALL_ACP_PROVIDERS: "" # no Claude Code / Codex / Gemini CLIs
+    profiles: ["build"]
+
   sandbox-test:
-    image: ng-automate/sandbox-test:1.53.0
+    image: ng-automate/sandbox-test:1.53.0-source
     build: docker/sandbox-test
     profiles: ["build"]
 

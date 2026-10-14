@@ -36,6 +36,7 @@ from openhands.tools.file_editor.utils.encoding import (
     with_encoding,
 )
 from openhands.tools.file_editor.utils.history import FileHistoryManager
+from openhands.tools.file_editor.utils.str_replace_hints import add_fix_hint
 
 
 logger = get_logger(__name__)
@@ -159,18 +160,24 @@ class FileEditor:
                 prev_exist=False,
             )
         elif command == "str_replace":
-            if old_str is None:
-                raise EditorToolParameterMissingError(command, "old_str")
-            if new_str is None:
-                raise EditorToolParameterMissingError(command, "new_str")
-            if new_str == old_str:
-                raise EditorToolParameterInvalidError(
-                    "new_str",
-                    new_str,
-                    "No replacement was performed. `new_str` and `old_str` must be "
-                    "different.",
-                )
-            return self.str_replace(_path, old_str, new_str)
+            try:
+                if old_str is None:
+                    raise EditorToolParameterMissingError(command, "old_str")
+                if new_str is None:
+                    raise EditorToolParameterMissingError(command, "new_str")
+                if new_str == old_str:
+                    raise EditorToolParameterInvalidError(
+                        "new_str",
+                        new_str,
+                        "No replacement was performed. `new_str` and `old_str` must be "
+                        "different.",
+                    )
+                return self.str_replace(_path, old_str, new_str)
+            except ToolError as error:
+                # NG Automate: the message also says how to fix the call, worked out
+                # from the file (utils/str_replace_hints.py).
+                add_fix_hint(self, error, _path, old_str, new_str)
+                raise
         elif command == "insert":
             if insert_line is None:
                 raise EditorToolParameterMissingError(command, "insert_line")

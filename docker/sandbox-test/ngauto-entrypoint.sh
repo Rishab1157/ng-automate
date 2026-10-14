@@ -58,9 +58,4 @@ elif ! start_live_view; then
   unset DISPLAY
 fi
 
-# Clearer file_editor errors: the agent server imports this module at start (see the Dockerfile).
-if [ -f /opt/ngauto/python/ngauto_editor_hints.py ]; then
-  set -- "$@" --import-modules ngauto_editor_hints
-fi
-
 exec "$@"

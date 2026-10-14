@@ -486,9 +486,14 @@ def test_str_replace_with_empty_old_str(editor):
             old_str="",
             new_str="New string",
         )
-    assert (
-        str(exc_info.value.message)
-        == """No replacement was performed. Multiple occurrences of old_str `` in lines [1, 2, 3]. Please ensure it is unique."""  # noqa: E501
+    # NG Automate: instead of listing every line, the message says what old_str must
+    # hold (utils/str_replace_hints.py).
+    assert str(exc_info.value.message) == (
+        "No replacement was performed: old_str is empty (or only spaces), so it matches "
+        "everywhere in the file. old_str must be the exact text you want to replace, "
+        "copied from the file. To add new lines, set old_str to the line just above "
+        "where they go, copied exactly, and new_str to that same line followed by the "
+        "new lines."
     )
 
 

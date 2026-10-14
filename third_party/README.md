@@ -17,5 +17,23 @@ Local changes to send upstream (each is small and keeps the old behaviour by def
      Devstral). The fallback now also drops from new_str the leading/trailing whitespace that old_str.strip()
      removed, but only the part new_str has too (common prefix/suffix), so whitespace added on purpose is kept.
      Upstream's own test (a Markdown hard line break in new_str) still passes. Test: tests/test_file_editor_fix.py.
-   - The sandbox runs the agent server's own copy of this file: the fix reaches the agents only when the sandbox
-     image carries it (see docker/sandbox-test/Dockerfile).
+
+3. openhands-tools/openhands/tools/file_editor/utils/str_replace_hints.py (new) + a small hook in editor.py
+   (FileEditor.__call__, the str_replace branch)
+   - A failed str_replace also says how to fix the call, worked out from the file: for an old_str that matches
+     several places, a ready-to-use old_str per place that matches only there (naming the neighbouring lines added to
+     make it unique, which new_str must keep); for one that is not in the file, line numbers copied from `view`, other
+     indentation (with the file's exact text), only its start or end in the file, or the most similar text; plus what
+     old_str/new_str must hold when one is empty, missing or both are the same (the text format of tool calls drops
+     the spaces at the start and end of every value, so a change made only there is lost), or when a value holds the
+     next parameter's tag because it was not closed with `</parameter>`. New lines are added with an anchor line in
+     old_str rather than `insert`, whose first line would lose its indentation in that format.
+     Why: with "Please ensure it is unique" or "did not appear verbatim" alone, a small model sent the same failing
+     edit 12 times in a row. Only the message changes: the edit fails exactly as before.
+   - Upstream test changed: tests/tools/file_editor/test_basic_operations.py::test_str_replace_with_empty_old_str
+     (the message no longer lists every line). Tests: tests/test_file_editor_hints.py (in ng-automate).
+
+The sandboxes run THIS code: NG Automate builds its agent server image from this folder with OpenHands' own recipe
+(openhands-agent-server/openhands/agent_server/docker/Dockerfile, target `source`; see docker-compose.yml,
+service agent-server), and docker/sandbox-test/Dockerfile builds on it. So a change here reaches the agents after
+`docker compose --profile build build agent-server sandbox-test`.

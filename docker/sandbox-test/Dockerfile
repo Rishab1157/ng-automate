@@ -1,13 +1,16 @@
-# Sandbox for running and healing test projects: the OpenHands agent server (same version as the SDK in
-# third_party/) plus the build tools test-automation projects need. Python 3.13, Node 24, Chromium and git
-# come with the base image.
+# Sandbox for running and healing test projects: OUR OpenHands agent server, built from the vendored SDK in
+# third_party/ (so every change made there runs in the sandbox), plus the build tools test-automation projects need.
+# Python 3.13, Node 24, Chromium and git come with the base image.
 #
 # Live view: browsers the tests drive show on a virtual display (Xvfb :99) that users watch, and can take over,
 # in the web UI through the API (see ngauto-entrypoint.sh).
 #
-# Build (from the repo root):
-#   docker build -t ng-automate/sandbox-test:1.53.0 docker/sandbox-test
-FROM ghcr.io/openhands/agent-server:1.53.0-python
+# Build (from the repo root), the agent server first:
+#   docker compose --profile build build agent-server
+#   docker compose --profile build build sandbox-test
+# The earlier image on OpenHands' prebuilt agent server stays as ng-automate/sandbox-test:1.53.0: to go back to it,
+# set SANDBOX_TEST_IMAGE=ng-automate/sandbox-test:1.53.0 in .env.
+FROM ng-automate/agent-server:1.53.0-source
 
 USER root
 RUN apt-get update \
@@ -58,12 +61,6 @@ COPY ngauto-entrypoint.sh ngauto-find-elements /usr/local/bin/
 RUN sed -i 's/\r$//' /usr/local/bin/ngauto-entrypoint.sh /usr/local/bin/ngauto-find-elements \
     && chmod 755 /usr/local/bin/ngauto-entrypoint.sh /usr/local/bin/ngauto-find-elements
 
-# Clearer file_editor errors (python/ngauto_editor_hints.py): a failed str_replace tells the agent how to fix its
-# call, worked out from the file. The agent server is a frozen program: it finds the module through
-# OH_EXTRA_PYTHON_PATH and imports it at start (ngauto-entrypoint.sh adds --import-modules).
-COPY python/ngauto_editor_hints.py /opt/ngauto/python/
-ENV OH_EXTRA_PYTHON_PATH=/opt/ngauto/python
-
 # noVNC focuses its screen when it connects. Without preventScroll the browser scrolls the page that embeds the live
 # view down to it, so NG Automate's step pages jumped away from what the user was reading.
 RUN sed -i 's/UI\.rfb\.focus();/UI.rfb.focus({ preventScroll: true });/' /usr/share/novnc/app/ui.js
@@ -74,7 +71,8 @@ ENV DISPLAY=:99 \
     OH_ENABLE_VSCODE=false \
     NGAUTO_LIVE_VIEW=1
 
-# Back to the base image's unprivileged user. Same entrypoint as the base image (tini + agent server), with the
-# live view started in between; DockerWorkspace passes the agent server's arguments (--host, --port).
+# Back to the base image's unprivileged user. Same entrypoint as the base image (tini + the agent server from
+# third_party/, run from source), with the live view started in between; DockerWorkspace passes the agent server's
+# arguments (--host, --port).
 USER openhands
-ENTRYPOINT ["tini", "--", "/usr/local/bin/ngauto-entrypoint.sh", "/usr/local/bin/openhands-agent-server"]
+ENTRYPOINT ["tini", "--", "/usr/local/bin/ngauto-entrypoint.sh", "/agent-server/.venv/bin/python", "-m", "openhands.agent_server"]
