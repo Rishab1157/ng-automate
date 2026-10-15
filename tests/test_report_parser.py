@@ -1,7 +1,12 @@
 from pathlib import Path
 
+import pytest
+
 from app.models.testRunModel import TestCaseStatus
 from app.utils.TestReportParser import MAX_REPORT_BYTES, parse_report_file, parse_reports
+
+# Real Playwright JUnit reports of fixtures/playwright_junit/demo.spec.ts (see test_failure_classifier).
+PLAYWRIGHT_RUNS = Path(__file__).parent / "fixtures" / "playwright_junit"
 
 SUREFIRE = """<?xml version="1.0" encoding="UTF-8"?>
 <testsuite name="com.demo.LoginTest" tests="3" failures="1" errors="1" skipped="1" time="2.5">
@@ -108,3 +113,24 @@ def test_parse_reports_collects_globs_once_and_skips_bad_files(tmp_path: Path) -
         "target/surefire-reports/testng-results.xml",
     ]
     assert len(cases) == 6
+
+
+@pytest.mark.parametrize(("version", "statuses", "message"), [
+    # Up to 1.58: every failure a <failure>, its message only the test's location and title.
+    ("1.50.1", ["passed", "failed", "failed", "failed"], "demo.spec.ts:8:5 clicks a missing element"),
+    ("1.58.2", ["passed", "failed", "failed", "failed"], "demo.spec.ts:8:5 clicks a missing element"),
+    # From 1.59 on: thrown errors are <error>s, and the message is the error.
+    ("1.64.1", ["passed", "error", "error", "failed"], "locator.click: Timeout 2000ms exceeded."),
+])
+def test_playwright_reports_old_and_new(version: str, statuses: list[str], message: str) -> None:
+    cases = parse_report_file(PLAYWRIGHT_RUNS / f"{version}-junit.xml")
+
+    assert [case.name for case in cases] == [
+        "passes", "clicks a missing element", "checkout › calls a method that does not exist",
+        "checkout › checks the wrong text",
+    ]
+    assert [case.status.value for case in cases] == statuses
+    assert {case.suite for case in cases} == {"demo.spec.ts"}
+    # The message is kept as the report writes it; the error is always in the details.
+    assert cases[1].message == message
+    assert "TimeoutError: locator.click: Timeout 2000ms exceeded." in (cases[1].details or "")

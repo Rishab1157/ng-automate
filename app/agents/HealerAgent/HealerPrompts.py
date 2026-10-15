@@ -1,4 +1,8 @@
-"""The healer's task message: the failure, the project and earlier attempts. How to fix it is the agent's call."""
+"""The healer's task message: the failure, the project and earlier attempts. How to fix it is the agent's call.
+
+The rules are the same for every stack: they say how to work, never how one framework does it. The failure and the
+project supply the details, with the check command NG Automate chose for it. The user's own instructions come first.
+"""
 
 from collections.abc import Sequence
 
@@ -7,7 +11,7 @@ from app.models.analyzerModel import FactSheetModel
 from app.models.healerModel import HealOutcomeModel
 from app.models.healMemoryModel import HealMemoryModel, HealMemoryResult
 from app.models.testRunModel import FailureKind, TestCommandModel, TestRunResultModel
-from app.utils.AgentPromptRules import PLAIN_TOOL_VALUES_RULE
+from app.utils.AgentPromptRules import PLAIN_TOOL_VALUES_RULE, VISIBLE_BROWSER_RULE, user_instructions_block
 
 MAX_OUTPUT_IN_PROMPT = 6000
 MAX_PREVIOUS_SUMMARY_CHARS = 300
@@ -41,19 +45,18 @@ Test command (run from /workspace/project): {command}
 Last result: exit code {exit_code}; {kind} — {reason}
 Key lines:
 {evidence}
-{output_section}{previous}{memories}
+{output_section}{previous}{memories}{user_block}
 Find the cause yourself and fix it. You work in your own sandbox with a terminal: read the project, change code or
-configuration, install or upgrade dependencies, download tools, drivers or browsers. If one approach does not work,
-try another one.
+configuration, install or upgrade dependencies, download tools, drivers or browsers (sudo works). If one approach does
+not work, try another one.
 
 Rules (every change you make is kept; a change that breaks them is reported to the user):
 - Fix only technical problems: dependencies and versions, build configuration, imports, syntax, tools and drivers,
   locators that do not find their element, and errors thrown by the test code itself.
-- A build that does not compile lists every error with its file and line: fix all of them. `cannot find symbol` for a
-  class means the file does not import it (or the class does not exist); for a method or variable it means the class
-  has no such member. Add the import, add the missing member, or call one that exists — do not stop while any compile
-  error is left. A type used but not found is usually a missing import: find where the project imports it (grep the
-  project for the type's name) and copy that exact import line into the failing file.
+- A build that does not compile or load lists its errors with file and line: fix all of them. A name, type or module it
+  cannot find is usually a missing import (check that a relative path is right for the file's folder) or a member that
+  does not exist: search the project for where it is defined and import it from there, add the missing member, or call
+  one that exists. Do not stop while any build error is left.
 - Test code that throws an error (a wrong key or argument, a missing method, a null value, a bad cast): fix the
   test code so it does what its test case describes, reusing the project's existing helpers, page objects and
   locator keys. Never change what a test checks.
@@ -62,27 +65,33 @@ Rules (every change you make is kept; a change that breaks them is reported to t
   not match, use another the test data gives for that element (or one from the project's page objects, or from the
   live page — `ngauto-find-elements <page URL>` lists the page's elements with locators checked on the live page).
   Change only the locator, never the action or the assertion, and end the line with the comment
-  {marker}: locator changed by the healer (// in Java/JS/TS, # in Python and Robot).
+  {marker}: locator changed by the healer (in that file's comment syntax).
 - NEVER delete, skip or disable tests; NEVER remove, weaken or comment out assertions or verification steps;
   NEVER wrap failing code in try/except or empty catch blocks.
+- Fix the failing file itself: never write a new test, or a copy of a test under another name, to get around a failure.
 - Do not try to fix failing assertions or application behaviour: that is not your job. One exception: a test in an
   `ngauto` folder was written by NG Automate's test generator from the user's test data (in /workspace/test-data).
   When such a test does not do what its test case says (it checks another element or value than the case's own
   verify step), correct it to follow its test case exactly.
 - Start from the evidence above: it names the failing test and where in the project it failed. Never add debugging
   code (prints, sleeps, pauses) or a dependency the failure does not need.
+- Change dependencies, scripts, compiler or test-runner settings only when the failure needs it; never add build tools,
+  compilers or type packages just to check your fix, and never write compiled copies of files into the project.
 - Keep the project's style and versions where possible.
-- Change project files only with the file_editor tool (view, then str_replace; `insert` with `insert_line` to add
-  lines; `create` for a new file). When str_replace is rejected (`did not appear verbatim`, or `Multiple occurrences
-  ... Please ensure it is unique`), never send the same call again: view the file and include the whole enclosing
-  method or statement, with enough surrounding lines, so old_str matches exactly once. `create` never overwrites a
-  file: a test file in an `ngauto` folder (written by NG Automate's test generator) that is badly broken may be
-  rewritten whole, by deleting it with `rm` in the terminal and then creating it again; edit every other file in
-  place. For a new file, make its folder with `mkdir -p` first but never `touch` the file (the editor refuses to overwrite an existing file, so the file would stay empty). Do not edit them
-  with sed, echo or other shell commands, do not create backup copies, and do not run git.
+- Change project files only with the file_editor tool (view, then str_replace; to add lines, str_replace with the line
+  just above as old_str and that line plus the new lines as new_str (not `insert`: its first line loses its
+  indentation); `create` for a new file). When str_replace is rejected (`did not appear verbatim`, or `Multiple
+  occurrences ... Please ensure it is unique`), never send the same call again: view the file and include the whole
+  enclosing method or statement, with enough surrounding lines, so old_str matches exactly once. `create` never
+  overwrites a file: a test file in an `ngauto` folder (written by NG Automate's test generator) that is badly broken
+  may be rewritten whole, by deleting it with `rm` in the terminal and then creating it again; edit every other file in
+  place. For a new file, make its folder with `mkdir -p` first but never `touch` the file (the editor refuses to
+  overwrite an existing file, so the file would stay empty). Do not edit them with sed, echo or other shell commands, do
+  not create backup copies, and do not run git.
 - Put downloads and temporary files outside the project (for example in /tmp), never in /workspace/project.
+- {screen_rule}
 - {plain_values}
-- You may run the test command (or a quicker build step such as `mvn -q -DskipTests compile`) to check your fix.
+- You may run the test command to check your fix{check_hint}.
   As soon as the command gets past this error, stop and reply.
 
 When you are done, reply with a short summary: what was wrong, what you changed, and why.
@@ -94,6 +103,13 @@ license), or a dependency or tool that cannot be obtained and has no alternative
 another locator, another version or another approach — is not a blocker: fix it first. A failed attempt is not a
 blocker: try another way first."""
 
+# Only for a stack with a quick check (TestCommandModel.check), the one NG Automate chose for the project. It only
+# builds or loads the tests, so it proves a fix of a build or load error, never one of a locator or of the test code.
+_CHECK_HINT = (
+    " (for a build or load error, the quicker check `{check}` is enough: it builds or loads the tests without running "
+    "them)"
+)
+
 
 def build_heal_prompt(
     result: TestRunResultModel,
@@ -101,7 +117,10 @@ def build_heal_prompt(
     fact_sheet: FactSheetModel,
     previous: Sequence[HealOutcomeModel] = (),
     memories: Sequence[HealMemoryModel] = (),
+    instructions: Sequence[str] = (),
 ) -> str:
+    """The failure, the project, earlier fixes and memories, then the user's `instructions` for this run (they come
+    before the rules)."""
     evidence = "\n".join(f"- {line}" for line in result.classification.evidence) or "- (none)"
     return _HEAL_PROMPT.format(
         stack=describe_stack(fact_sheet),
@@ -118,9 +137,12 @@ def build_heal_prompt(
         ),
         previous=_previous(previous),
         memories=_memories(memories),
+        user_block=user_instructions_block(instructions),
         blocked=BLOCKED_MARKER,
         marker=UNVERIFIED_MARKER,
+        screen_rule=VISIBLE_BROWSER_RULE,
         plain_values=PLAIN_TOOL_VALUES_RULE,
+        check_hint=_CHECK_HINT.format(check=command.check) if command.check else "",
     )
 
 

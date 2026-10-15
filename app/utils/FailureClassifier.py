@@ -23,10 +23,10 @@ MAX_EVIDENCE_CHARS = 600
 # Stack frames kept with an error thrown by the test code: where it was thrown.
 MAX_STACK_FRAMES = 3
 
-# The build file itself no longer loads (Maven, Gradle, npm): nothing can even compile.
+# The build file itself no longer loads (Maven, Gradle, npm, Playwright's tsconfig.json): nothing can even compile.
 _BUILD_FILE_ERRORS = (
     r"Malformed POM|Non-parseable POM|problems were encountered while processing the POMs"
-    r"|Could not compile (?:build|settings) file|EJSONPARSE|Failed to parse JSON"
+    r"|Could not compile (?:build|settings) file|EJSONPARSE|Failed to parse JSON|Failed to load tsconfig file"
 )
 BUILD_FILE_BROKEN = re.compile(_BUILD_FILE_ERRORS, re.IGNORECASE)
 
@@ -68,9 +68,11 @@ OUTPUT_PATTERNS: list[tuple[FailureKind, re.Pattern[str]]] = [
 COMPILER_DIAGNOSTIC = re.compile(
     r"[\w./\\-]+\.(?:java|kt|kts|groovy|scala|ts|tsx|js|jsx|mjs|py|cs)(?::\[\d+,\d+\]|:\d+|\(\d+,\d+\)|\", line \d+)"
 )
-# A JVM stack frame, e.g. "	at io.cucumber.core.runtime.TestCaseResultObserver.assert(TestCaseResultObserver.java:69)"
-# or, with its module, "at java.base/java.lang.reflect.Method.invoke(Method.java:580)".
-STACK_FRAME = re.compile(r"\s*at\s+[\w$.<>/@-]+\(")
+# A stack frame. JVM: "	at io.cucumber.core.runtime.TestCaseResultObserver.assert(TestCaseResultObserver.java:69)" or,
+# with its module, "at java.base/java.lang.reflect.Method.invoke(Method.java:580)". JavaScript, with a space before the
+# location or no function at all: "    at loadTsConfig (/workspace/project/node_modules/.../index.js:753:11)",
+# "    at /workspace/project/tests/login.spec.ts:12:5".
+STACK_FRAME = re.compile(r"\s*at\s+(?:[\w$.<>/@-]+\(|.+ \(.+:\d+:\d+\)\s*$|\S+:\d+:\d+\s*$)")
 
 # A failing test's message that means the environment (network, driver download, toolchain) stopped the run before
 # the test could check anything. Checked on the failing cases too: the build output may not repeat the message.
@@ -114,6 +116,18 @@ NO_TESTS_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# NG Automate's own notes in the output (TestRunner's: the setup it ran first, a timeout) start with this. They are not
+# the project's output, so no pattern reads them as its failure: the setup note names its command, e.g. "npx playwright
+# install chromium", which is no sign of a missing browser.
+OWN_NOTE_PREFIX = "[NG Automate]"
+
+# A failure message that only names the test: its file, line and column, then its title, e.g. "login.spec.ts:12:7 logs
+# in". Playwright's JUnit report writes it up to 1.58 (from 1.59 on, the message is the error, unless the test failed
+# without one). What went wrong is then in the details.
+LOCATION_AND_TITLE = re.compile(r"([^:\n]+:\d+:\d+) (.+)")
+# The call log under a Playwright error is not the error: it says "waiting for locator(...)" for failed checks too.
+CALL_LOG_LINE = re.compile(r"Call log:|- waiting for ")
+
 _REASONS = {
     FailureKind.PASSED: "All tests passed.",
     FailureKind.NO_TESTS: "The test command ran but no tests were executed.",
@@ -129,7 +143,9 @@ _REASONS = {
 
 def classify_failure(exit_code: int, output: str, cases: list[TestCaseResultModel]) -> FailureClassificationModel:
     tail = output[-MAX_SCANNED_CHARS:]
-    failing = [case for case in cases if case.status in (TestCaseStatus.FAILED, TestCaseStatus.ERROR)]
+    failing = [
+        _with_error_message(case) for case in cases if case.status in (TestCaseStatus.FAILED, TestCaseStatus.ERROR)
+    ]
     ran = [case for case in cases if case.status != TestCaseStatus.SKIPPED]
 
     if exit_code == 0 and not failing:
@@ -177,6 +193,19 @@ def classify_failure(exit_code: int, output: str, cases: list[TestCaseResultMode
     if NO_TESTS_PATTERN.search(tail):
         return _result(FailureKind.NO_TESTS, _matching_lines(tail, NO_TESTS_PATTERN))
     return _result(FailureKind.UNKNOWN, tail.strip().splitlines()[-3:])
+
+
+def _with_error_message(case: TestCaseResultModel) -> TestCaseResultModel:
+    """The failing test with its error as its message. When the message only names the test (LOCATION_AND_TITLE; the
+    title is the end of the test's name, which also holds the names of its describe blocks), the error is the first
+    line of the details that is not blank, not the header that repeats the test's location, and not its call log."""
+    named = LOCATION_AND_TITLE.fullmatch(case.message or "")
+    if named is None or not case.name.endswith(named.group(2)):
+        return case
+    location = named.group(1)
+    lines = (line.strip() for line in (case.details or "").splitlines())
+    error = next((line for line in lines if line and location not in line and not CALL_LOG_LINE.match(line)), None)
+    return case.model_copy(update={"message": error}) if error else case
 
 
 def _code_error(case: TestCaseResultModel) -> str | None:
@@ -248,7 +277,7 @@ def _compiler_errors(text: str) -> list[str]:
 def _matching_lines(text: str, pattern: re.Pattern[str]) -> list[str]:
     lines: list[str] = []
     for line in text.splitlines():
-        if pattern.search(line):
+        if pattern.search(line) and not line.startswith(OWN_NOTE_PREFIX):
             lines.append(line)
             if len(lines) == MAX_EVIDENCE:
                 break

@@ -181,6 +181,70 @@ def test_prompt_keeps_only_the_end_of_long_output_and_no_code_fence_breaks() -> 
     assert "Known fixes" not in prompt
 
 
+USER_BLOCK_HEADER = (
+    "The user's instructions for this run (they come first: where they differ from the rules below, follow them; "
+    "never delete or weaken an existing test):"
+)
+
+
+def test_the_users_instructions_come_right_before_the_rules_only_when_given() -> None:
+    prompt = build_heal_prompt(_result(), COMMAND, FACT_SHEET, instructions=["Keep TestNG 7.x.", "  "])
+
+    # After the facts of the failure, before the rules; a blank instruction is left out.
+    assert f"\n{USER_BLOCK_HEADER}\n- Keep TestNG 7.x.\n\nFind the cause yourself" in prompt
+    assert prompt.index("Key lines:") < prompt.index(USER_BLOCK_HEADER)
+    for nothing in ((), ["", "  "]):
+        assert "The user's instructions" not in build_heal_prompt(_result(), COMMAND, FACT_SHEET, instructions=nothing)
+
+
+def test_the_quicker_check_is_offered_only_when_the_project_has_one() -> None:
+    with_check = COMMAND.model_copy(update={"check": "mvn -B -ntp -q -DskipTests test-compile"})
+
+    without = build_heal_prompt(_result(), COMMAND, FACT_SHEET)
+    offered = build_heal_prompt(_result(), with_check, FACT_SHEET)
+
+    assert "- You may run the test command to check your fix.\n" in without and "quicker" not in without
+    assert (
+        "- You may run the test command to check your fix (for a build or load error, the quicker check "
+        "`mvn -B -ntp -q -DskipTests test-compile` is enough: it builds or loads the tests without running them).\n"
+    ) in offered
+
+
+def test_a_playwright_prompt_has_the_generic_rules_and_no_other_stacks_recipes() -> None:
+    # The rules say how to work; the project and its failure give the details (a javac recipe once reached every stack).
+    facts = FACT_SHEET.model_copy(update={
+        "language_files": {"TypeScript": 2}, "primary_language": _fact("TypeScript"), "build_tool": _fact("npm"),
+        "test_frameworks": _fact(["Playwright Test"]), "automation_tools": _fact(["Playwright"]),
+        "marker_files": ["package.json", "playwright.config.ts"],
+    })
+    command = TestCommandModel(
+        tool="playwright", command="npx playwright test", setup="npm ci", check="npx playwright test --list"
+    )
+    error = "tests/ngauto/login.spec.ts:3:27 - error TS2307: Cannot find module '../pages/LoginPage'"
+    result = TestRunResultModel(
+        command=command.command, exit_code=1, duration_seconds=2.0, total=0, passed=0, failed=0, errors=0, skipped=0,
+        output_tail=error,
+        classification=FailureClassificationModel(
+            kind=FailureKind.BUILD_FAILURE, healable=True, reason="r", evidence=[error]
+        ),
+    )
+
+    prompt = build_heal_prompt(result, command, facts)
+    flat = " ".join(prompt.split())
+
+    assert "TypeScript · npm · Playwright Test · Playwright" in prompt
+    for other in ("mvn", "cannot find symbol", "insert_line", "Java/JS/TS"):
+        assert other not in prompt
+    assert "(for a build or load error, the quicker check `npx playwright test --list` is enough" in prompt
+    # The user watches the browser live: never headless, maximized where the framework allows it.
+    assert "Never make the browser headless" in flat and "maximized window" in flat
+    assert "A name, type or module it cannot find is usually a missing import" in flat
+    assert "(not `insert`: its first line loses its indentation)" in flat
+    assert "(in that file's comment syntax)" in prompt and "(sudo works)" in prompt
+    assert "never write a new test, or a copy of a test under another name, to get around a failure" in flat
+    assert "never add build tools, compilers or type packages just to check your fix" in flat
+
+
 # ---------------------------------------------------------------- heal()
 
 
@@ -393,6 +457,22 @@ def test_earlier_fixes_are_described_in_the_prompt(
         "Fix 1: Changed the TestNG version to 7.12.0. Changed: pom.xml. Broke the rules in pom.xml (build_file_broken)."
         in prompt
     )
+
+
+def test_the_users_instructions_reach_the_healers_task_message(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
+    created = conversation()
+    given, not_given = _project(tmp_path / "given"), _project(tmp_path / "not-given")
+
+    _healer().heal(
+        LocalWorkspace(working_dir=str(given)), given, _result(), COMMAND, FACT_SHEET,
+        instructions="Keep the TestNG version the project uses.",
+    )
+    _healer().heal(LocalWorkspace(working_dir=str(not_given)), not_given, _result(), COMMAND, FACT_SHEET)
+
+    assert f"{USER_BLOCK_HEADER}\n- Keep the TestNG version the project uses.\n" in created[0].messages[0]
+    assert "The user's instructions" not in created[1].messages[0]
 
 
 def test_agent_that_changed_nothing_is_nudged_once(conversation: Callable[..., list[FakeConversation]], tmp_path: Path) -> None:

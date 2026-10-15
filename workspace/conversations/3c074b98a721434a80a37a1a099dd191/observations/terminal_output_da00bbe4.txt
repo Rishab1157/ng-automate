@@ -1,0 +1,488 @@
+> saucedemo-playwright-tests@1.0.0 build
+> tsc
+
+tests/ngauto/add-to-cart.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test';
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/add-to-cart.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/add-to-cart.spec.ts:5:78 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+5   test('Add Sauce Labs Backpack to cart and verify the cart badge', async ({ page, loginPage }) => {
+                                                                               ~~~~
+
+tests/ngauto/add-to-cart.spec.ts:5:84 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+5   test('Add Sauce Labs Backpack to cart and verify the cart badge', async ({ page, loginPage }) => {
+                                                                                     ~~~~~~~~~
+
+tests/ngauto/checkout-with-missing-first-name.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test';
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/checkout-with-missing-first-name.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/checkout-with-missing-first-name.spec.ts:3:30 - error TS2307: Cannot find module '../pages/ProductsPage' or its corresponding type declarations.
+
+3 import { ProductsPage } from '../pages/ProductsPage';
+                               ~~~~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/checkout-with-missing-first-name.spec.ts:4:10 - error TS2300: Duplicate identifier 'CheckoutPage'.
+
+4 import { CheckoutPage } from '../pages/CheckoutPage';
+           ~~~~~~~~~~~~
+
+tests/ngauto/checkout-with-missing-first-name.spec.ts:4:30 - error TS2307: Cannot find module '../pages/CheckoutPage' or its corresponding type declarations.
+
+4 import { CheckoutPage } from '../pages/CheckoutPage';
+                               ~~~~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/checkout-with-missing-first-name.spec.ts:5:10 - error TS2300: Duplicate identifier 'CheckoutPage'.
+
+5 import { CheckoutPage } from '../pages/CheckoutPage';
+           ~~~~~~~~~~~~
+
+tests/ngauto/checkout-with-missing-first-name.spec.ts:5:30 - error TS2307: Cannot find module '../pages/CheckoutPage' or its corresponding type declarations.
+
+5 import { CheckoutPage } from '../pages/CheckoutPage';
+                               ~~~~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/checkout-with-missing-first-name.spec.ts:8:75 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+8   test('checkout form refuses to continue without a first name', async ({ page, loginPage, productsPage, checkoutPage }) => {
+                                                                            ~~~~
+
+tests/ngauto/checkout-with-missing-first-name.spec.ts:8:81 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+8   test('checkout form refuses to continue without a first name', async ({ page, loginPage, productsPage, checkoutPage }) => {
+                                                                                  ~~~~~~~~~
+
+tests/ngauto/checkout-with-missing-first-name.spec.ts:8:92 - error TS7031: Binding element 'productsPage' implicitly has an 'any' type.
+
+8   test('checkout form refuses to continue without a first name', async ({ page, loginPage, productsPage, checkoutPage }) => {
+                                                                                             ~~~~~~~~~~~~
+
+tests/ngauto/checkout-with-missing-first-name.spec.ts:8:106 - error TS7031: Binding element 'checkoutPage' implicitly has an 'any' type.
+
+8   test('checkout form refuses to continue without a first name', async ({ page, loginPage, productsPage, checkoutPage }) => {
+                                                                                                           ~~~~~~~~~~~~
+
+tests/ngauto/invalid-password.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Invalid Password', () => { test('TD-002: Invalid password [tags: login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('standard_user', 'wrong_password'); await expect(loginPage.errorMessage).toHaveText('Epic sadface: Username and password do not match any user in this service'); }); });
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/invalid-password.spec.ts:1:76 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Invalid Password', () => { test('TD-002: Invalid password [tags: login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('standard_user', 'wrong_password'); await expect(loginPage.errorMessage).toHaveText('Epic sadface: Username and password do not match any user in this service'); }); });
+                                                                             ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/invalid-password.spec.ts:1:196 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Invalid Password', () => { test('TD-002: Invalid password [tags: login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('standard_user', 'wrong_password'); await expect(loginPage.errorMessage).toHaveText('Epic sadface: Username and password do not match any user in this service'); }); });
+                                                                                                                                                                                                     ~~~~
+
+tests/ngauto/invalid-password.spec.ts:1:202 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Invalid Password', () => { test('TD-002: Invalid password [tags: login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('standard_user', 'wrong_password'); await expect(loginPage.errorMessage).toHaveText('Epic sadface: Username and password do not match any user in this service'); }); });
+                                                                                                                                                                                                           ~~~~~~~~~
+
+tests/ngauto/invalidPassword.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test';
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/invalidPassword.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/invalidPassword.spec.ts:5:51 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+5   test('invalid password [tags: login]', async ({ page, loginPage }) => {
+                                                    ~~~~
+
+tests/ngauto/invalidPassword.spec.ts:5:57 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+5   test('invalid password [tags: login]', async ({ page, loginPage }) => {
+                                                          ~~~~~~~~~
+
+tests/ngauto/invalid_password.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test.ts' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test.ts';
+                               ~~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/invalid_password.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/invalid_password.spec.ts:5:59 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+5   test('TD-002: Invalid password [tags: login]', async ({ page, loginPage }) => {
+                                                            ~~~~
+
+tests/ngauto/invalid_password.spec.ts:5:65 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+5   test('TD-002: Invalid password [tags: login]', async ({ page, loginPage }) => {
+                                                                  ~~~~~~~~~
+
+tests/ngauto/locked-out-user.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Locked Out User', () => { test('TD-003: Locked-out user [tags: login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('locked_out_user', 'secret_sauce'); await expect(loginPage.errorMessage).toHaveText('Epic sadface: Sorry, this user has been locked out.'); }); });
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/locked-out-user.spec.ts:1:76 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Locked Out User', () => { test('TD-003: Locked-out user [tags: login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('locked_out_user', 'secret_sauce'); await expect(loginPage.errorMessage).toHaveText('Epic sadface: Sorry, this user has been locked out.'); }); });
+                                                                             ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/locked-out-user.spec.ts:1:194 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Locked Out User', () => { test('TD-003: Locked-out user [tags: login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('locked_out_user', 'secret_sauce'); await expect(loginPage.errorMessage).toHaveText('Epic sadface: Sorry, this user has been locked out.'); }); });
+                                                                                                                                                                                                   ~~~~
+
+tests/ngauto/locked-out-user.spec.ts:1:200 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Locked Out User', () => { test('TD-003: Locked-out user [tags: login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('locked_out_user', 'secret_sauce'); await expect(loginPage.errorMessage).toHaveText('Epic sadface: Sorry, this user has been locked out.'); }); });
+                                                                                                                                                                                                         ~~~~~~~~~
+
+tests/ngauto/locked-out.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage';
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/locked-out.spec.ts:1:76 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage';
+                                                                             ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/locked-out.spec.ts:4:58 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+4   test('TD-003: Locked-out user [tags: login]', async ({ page, loginPage }) => {
+                                                           ~~~~
+
+tests/ngauto/locked-out.spec.ts:4:64 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+4   test('TD-003: Locked-out user [tags: login]', async ({ page, loginPage }) => {
+                                                                 ~~~~~~~~~
+
+tests/ngauto/lockedOutUser.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test';
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/lockedOutUser.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/lockedOutUser.spec.ts:5:50 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+5   test('locked-out user [tags: login]', async ({ page, loginPage }) => {
+                                                   ~~~~
+
+tests/ngauto/lockedOutUser.spec.ts:5:56 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+5   test('locked-out user [tags: login]', async ({ page, loginPage }) => {
+                                                         ~~~~~~~~~
+
+tests/ngauto/locked_out_user.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test.ts' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test.ts';
+                               ~~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/locked_out_user.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/locked_out_user.spec.ts:5:58 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+5   test('TD-003: Locked-out user [tags: login]', async ({ page, loginPage }) => {
+                                                           ~~~~
+
+tests/ngauto/locked_out_user.spec.ts:5:64 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+5   test('TD-003: Locked-out user [tags: login]', async ({ page, loginPage }) => {
+          <response clipped><NOTE>Due to the max output limit, only part of the full response has been shown to you.</NOTE>                                                                                                        ~~~~~~~~~~~~
+
+tests/ngauto/successful-checkout.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test';
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/successful-checkout.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/successful-checkout.spec.ts:3:30 - error TS2307: Cannot find module '../pages/ProductsPage' or its corresponding type declarations.
+
+3 import { ProductsPage } from '../pages/ProductsPage';
+                               ~~~~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/successful-checkout.spec.ts:4:10 - error TS2300: Duplicate identifier 'CheckoutPage'.
+
+4 import { CheckoutPage } from '../pages/CheckoutPage';
+           ~~~~~~~~~~~~
+
+tests/ngauto/successful-checkout.spec.ts:4:30 - error TS2307: Cannot find module '../pages/CheckoutPage' or its corresponding type declarations.
+
+4 import { CheckoutPage } from '../pages/CheckoutPage';
+                               ~~~~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/successful-checkout.spec.ts:5:10 - error TS2300: Duplicate identifier 'CheckoutPage'.
+
+5 import { CheckoutPage } from '../pages/CheckoutPage';
+           ~~~~~~~~~~~~
+
+tests/ngauto/successful-checkout.spec.ts:5:30 - error TS2307: Cannot find module '../pages/CheckoutPage' or its corresponding type declarations.
+
+5 import { CheckoutPage } from '../pages/CheckoutPage';
+                               ~~~~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/successful-checkout.spec.ts:8:82 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+8   test('full checkout of one product ends with the order confirmation', async ({ page, loginPage, productsPage, checkoutPage }) => {
+                                                                                   ~~~~
+
+tests/ngauto/successful-checkout.spec.ts:8:88 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+8   test('full checkout of one product ends with the order confirmation', async ({ page, loginPage, productsPage, checkoutPage }) => {
+                                                                                         ~~~~~~~~~
+
+tests/ngauto/successful-checkout.spec.ts:8:99 - error TS7031: Binding element 'productsPage' implicitly has an 'any' type.
+
+8   test('full checkout of one product ends with the order confirmation', async ({ page, loginPage, productsPage, checkoutPage }) => {
+                                                                                                    ~~~~~~~~~~~~
+
+tests/ngauto/successful-checkout.spec.ts:8:113 - error TS7031: Binding element 'checkoutPage' implicitly has an 'any' type.
+
+8   test('full checkout of one product ends with the order confirmation', async ({ page, loginPage, productsPage, checkoutPage }) => {
+                                                                                                                  ~~~~~~~~~~~~
+
+tests/ngauto/td-001-valid-login.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test';
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/td-001-valid-login.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/td-001-valid-login.spec.ts:5:72 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+5   test('A valid user logs in and lands on the products page', async ({ page, loginPage }) => {
+                                                                         ~~~~
+
+tests/ngauto/td-001-valid-login.spec.ts:5:78 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+5   test('A valid user logs in and lands on the products page', async ({ page, loginPage }) => {
+                                                                               ~~~~~~~~~
+
+tests/ngauto/td-002-invalid-password.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test';
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/td-002-invalid-password.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/td-002-invalid-password.spec.ts:5:70 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+5   test('A wrong password is refused with an error message', async ({ page, loginPage }) => {
+                                                                       ~~~~
+
+tests/ngauto/td-002-invalid-password.spec.ts:5:76 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+5   test('A wrong password is refused with an error message', async ({ page, loginPage }) => {
+                                                                             ~~~~~~~~~
+
+tests/ngauto/td-003-locked-out-user.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test';
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/td-003-locked-out-user.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/td-003-locked-out-user.spec.ts:5:52 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+5   test('A locked-out user cannot log in', async ({ page, loginPage }) => {
+                                                     ~~~~
+
+tests/ngauto/td-003-locked-out-user.spec.ts:5:58 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+5   test('A locked-out user cannot log in', async ({ page, loginPage }) => {
+                                                           ~~~~~~~~~
+
+tests/ngauto/td-004-empty-credentials.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { test, expect } from '../fixtures/test';
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/td-004-empty-credentials.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/td-004-empty-credentials.spec.ts:4:44 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+4 test('TD-004: Empty credentials', async ({ page, loginPage }) => {
+                                             ~~~~
+
+tests/ngauto/td-004-empty-credentials.spec.ts:4:50 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+4 test('TD-004: Empty credentials', async ({ page, loginPage }) => {
+                                                   ~~~~~~~~~
+
+tests/ngauto/td-005-empty-username.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { test, expect } from '../fixtures/test';
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/td-005-empty-username.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/td-005-empty-username.spec.ts:4:41 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+4 test('TD-005: Empty username', async ({ page, loginPage }) => {
+                                          ~~~~
+
+tests/ngauto/td-005-empty-username.spec.ts:4:47 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+4 test('TD-005: Empty username', async ({ page, loginPage }) => {
+                                                ~~~~~~~~~
+
+tests/ngauto/td-006-empty-password.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { test, expect } from '../fixtures/test';
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/td-006-empty-password.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/td-006-empty-password.spec.ts:4:41 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+4 test('TD-006: Empty password', async ({ page, loginPage }) => {
+                                          ~~~~
+
+tests/ngauto/td-006-empty-password.spec.ts:4:47 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+4 test('TD-006: Empty password', async ({ page, loginPage }) => {
+                                                ~~~~~~~~~
+
+tests/ngauto/valid-login.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Valid Login', () => { test('TD-001: Valid login [tags: smoke, login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('standard_user', 'secret_sauce'); await expect(page).toHaveTitle('Products'); }); });
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/valid-login.spec.ts:1:76 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Valid Login', () => { test('TD-001: Valid login [tags: smoke, login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('standard_user', 'secret_sauce'); await expect(page).toHaveTitle('Products'); }); });
+                                                                             ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/valid-login.spec.ts:1:193 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Valid Login', () => { test('TD-001: Valid login [tags: smoke, login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('standard_user', 'secret_sauce'); await expect(page).toHaveTitle('Products'); }); });
+                                                                                                                                                                                                  ~~~~
+
+tests/ngauto/valid-login.spec.ts:1:199 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+1 import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Valid Login', () => { test('TD-001: Valid login [tags: smoke, login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('standard_user', 'secret_sauce'); await expect(page).toHaveTitle('Products'); }); });
+                                                                                                                                                                                                        ~~~~~~~~~
+
+tests/ngauto/validLogin.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test';
+                               ~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/validLogin.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/validLogin.spec.ts:5:53 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+5   test('valid login [tags: smoke, login]', async ({ page, loginPage }) => {
+                                                      ~~~~
+
+tests/ngauto/validLogin.spec.ts:5:59 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+5   test('valid login [tags: smoke, login]', async ({ page, loginPage }) => {
+                                                            ~~~~~~~~~
+
+tests/ngauto/valid_login.spec.ts:1:30 - error TS2307: Cannot find module '../fixtures/test.ts' or its corresponding type declarations.
+
+1 import { expect, test } from '../fixtures/test.ts';
+                               ~~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/valid_login.spec.ts:2:27 - error TS2307: Cannot find module '../pages/LoginPage' or its corresponding type declarations.
+
+2 import { LoginPage } from '../pages/LoginPage';
+                            ~~~~~~~~~~~~~~~~~~~~
+
+tests/ngauto/valid_login.spec.ts:5:61 - error TS7031: Binding element 'page' implicitly has an 'any' type.
+
+5   test('TD-001: Valid login [tags: smoke, login]', async ({ page, loginPage }) => {
+                                                              ~~~~
+
+tests/ngauto/valid_login.spec.ts:5:67 - error TS7031: Binding element 'loginPage' implicitly has an 'any' type.
+
+5   test('TD-001: Valid login [tags: smoke, login]', async ({ page, loginPage }) => {
+                                                                    ~~~~~~~~~
+
+tsconfig.json:12:1 - error TS1005: ',' expected.
+
+12 ]
+   ~
+
+
+Found 104 errors in 22 files.
+
+Errors  Files
+     4  tests/ngauto/add-to-cart.spec.ts:1
+    11  tests/ngauto/checkout-with-missing-first-name.spec.ts:1
+     4  tests/ngauto/invalid-password.spec.ts:1
+     4  tests/ngauto/invalidPassword.spec.ts:1
+     4  tests/ngauto/invalid_password.spec.ts:1
+     4  tests/ngauto/locked-out-user.spec.ts:1
+     4  tests/ngauto/locked-out.spec.ts:1
+     4  tests/ngauto/lockedOutUser.spec.ts:1
+     4  tests/ngauto/locked_out_user.spec.ts:1
+     6  tests/ngauto/product-sorting.spec.ts:1
+     7  tests/ngauto/remove-product-from-cart.spec.ts:1
+    11  tests/ngauto/successful-checkout.spec.ts:1
+     4  tests/ngauto/td-001-valid-login.spec.ts:1
+     4  tests/ngauto/td-002-invalid-password.spec.ts:1
+     4  tests/ngauto/td-003-locked-out-user.spec.ts:1
+     4  tests/ngauto/td-004-empty-credentials.spec.ts:1
+     4  tests/ngauto/td-005-empty-username.spec.ts:1
+     4  tests/ngauto/td-006-empty-password.spec.ts:1
+     4  tests/ngauto/valid-login.spec.ts:1
+     4  tests/ngauto/validLogin.spec.ts:1
+     4  tests/ngauto/valid_login.spec.ts:1
+     1  tsconfig.json:12
+[The command completed with exit code 2.]
+[Current working directory: /workspace/project]
+[Python interpreter: /usr/local/bin/python]
+[Command finished with exit code 2]

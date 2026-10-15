@@ -15,10 +15,15 @@ logger = logging.getLogger(__name__)
 
 # How often a paused agent's thread checks whether the user resumed it.
 PAUSE_POLL_SECONDS = 0.5
-# How the user's messages reach an agent: marked as the user's, so the agent treats them as instructions to follow.
-USER_MESSAGE = "Message from the user running this job (follow it, together with your task): {text}"
+# How the user's messages reach an agent: marked as the user's, so the agent treats them as instructions to follow,
+# before its own default rules (but it never deletes or weakens an existing test).
+USER_MESSAGE = (
+    "Message from the user running this job. Follow it; where it differs from your task's rules, the user's message "
+    "wins (but never delete or weaken an existing test): {text}"
+)
 EARLIER_INSTRUCTIONS = (
-    "Earlier in this run the user gave these instructions; follow them, together with your task:\n{instructions}"
+    "Earlier in this run the user gave these instructions. Follow them; where they differ from your task's rules, the "
+    "user's instructions win (but never delete or weaken an existing test):\n{instructions}"
 )
 
 

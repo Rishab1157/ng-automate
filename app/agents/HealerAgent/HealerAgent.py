@@ -105,13 +105,15 @@ class HealerAgent:
         control: AgentControl | None = None,
         time_limit: float | None = None,
         memories: Sequence[HealMemoryModel] = (),
+        instructions: str | None = None,
     ) -> HealOutcomeModel:
         """Blocking: call from a worker thread. `project_dir` is the host copy mounted in the sandbox.
 
         `previous`: this run's earlier fixes, so the healer does not repeat one that did not work. `memories`: similar
         heals from earlier runs of the organization (context; the agent decides). `time_limit`: what is left of the
-        run's healing budget (default: the healer's own timeout); paused time does not count. Never raises HealError:
-        when the agent stops early, the outcome says why in `error`.
+        run's healing budget (default: the healer's own timeout); paused time does not count. `instructions`: the
+        user's own words for this run (given when it was created); they come before the healer's default rules. Never
+        raises HealError: when the agent stops early, the outcome says why in `error`.
         """
         started = time.monotonic()
         paused_before = control.paused_seconds if control is not None else 0.0
@@ -133,7 +135,9 @@ class HealerAgent:
             # No extra LLM call to name the conversation: the shared local model is slow.
             autotitle=False,
         )
-        prompt = build_heal_prompt(result, command, fact_sheet, previous, memories)
+        prompt = build_heal_prompt(
+            result, command, fact_sheet, previous, memories, instructions=[instructions] if instructions else ()
+        )
         deadline = started + (self.timeout_seconds if time_limit is None else time_limit)
         error: str | None = None
         answer = ""

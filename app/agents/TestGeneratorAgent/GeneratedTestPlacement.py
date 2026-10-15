@@ -24,9 +24,10 @@ def placement_rule(fact_sheet: FactSheetModel) -> str:
     stack = _stack(fact_sheet)
     if stack == "cucumber":
         return (
-            "Write the scenarios in a new .feature file in the project's features folder. Put any missing step "
-            "definitions in a new step-definition class next to the existing ones (in the package the runner's glue "
-            "scans)."
+            "Write the scenarios in a new .feature file in the project's features folder (where its runner reads "
+            "feature files). Put any missing step definitions in a new step-definition file of your own next to the "
+            "existing ones, where the runner finds steps (the package or folder its glue or steps setting names). If "
+            "most of the project's tests are not feature files, write tests like those instead."
         )
     if stack in ("maven", "gradle"):
         return (
@@ -40,17 +41,18 @@ def placement_rule(fact_sheet: FactSheetModel) -> str:
     if stack == "pytest":
         return (
             f"Put the new test files in a folder named '{GENERATED_DIR}' inside the tests folder (a 'tests' folder at "
-            "the project root when there is none), named test_<case>.py."
+            "the project root when there is none), named like the existing test files (test_<case>.py when unsure)."
         )
     if stack == "robot":
         return (
             f"Put the new .robot files in a folder named '{GENERATED_DIR}' next to the existing suites (in a 'tests' "
             "folder at the project root when there are none)."
         )
+    # Any other stack: the project's own layout and naming decide, not a guess about its language.
     return (
-        f"Put the new spec files in a folder named '{GENERATED_DIR}' inside the folder that holds the existing specs "
-        "(the test folder the runner's config names, when there are none), using the same file naming and language "
-        "(.ts or .js) as the project."
+        f"Put each new test file in a new folder named '{GENERATED_DIR}' inside the folder that holds the project's "
+        "existing tests, in the same language and named like the existing test files (same suffix), so the project's "
+        "runner finds it; read the runner's configuration (its test folder and file pattern) when unsure."
     )
 
 
@@ -95,7 +97,11 @@ def unverified_locators(project_root: Path, files: list[FileChangeModel], limit:
 def _stack(fact_sheet: FactSheetModel) -> str:
     build_tool = _first(fact_sheet.build_tool.value)
     frameworks = _values(fact_sheet.test_frameworks.value)
-    if build_tool == "Maven" and _first(fact_sheet.bdd_tool.value) == "Cucumber":
+    bdd_tool = _first(fact_sheet.bdd_tool.value)
+    if build_tool == "Maven" and bdd_tool == "Cucumber":
+        return "cucumber"
+    # Any other BDD project (Gradle with Cucumber, cucumber-js, behave, pytest-bdd, Reqnroll ...) that has features.
+    if bdd_tool and fact_sheet.feature_file_count > 0:
         return "cucumber"
     if build_tool == "Maven":
         return "maven"

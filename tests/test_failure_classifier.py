@@ -1,10 +1,13 @@
 import time
+from pathlib import Path
 
 import pytest
 
+from app.agents.RunnerAgent.TestRunner import SETUP_NOTE
 from app.config import settings
 from app.models.testRunModel import FailureKind, TestCaseResultModel, TestCaseStatus
-from app.utils.FailureClassifier import classify_failure
+from app.utils.FailureClassifier import OWN_NOTE_PREFIX, classify_failure
+from app.utils.TestReportParser import parse_report_file
 
 
 def _case(status: TestCaseStatus, message: str | None = None) -> TestCaseResultModel:
@@ -280,8 +283,116 @@ def test_the_tests_own_frame_is_kept_behind_a_deep_helper_chain() -> None:
     "[ERROR] Non-parseable POM /workspace/project/pom.xml: end tag name </dependencies> must match start tag",
     "* What went wrong:\nCould not compile build file '/workspace/project/build.gradle'.",
     "npm ERR! code EJSONPARSE\nnpm ERR! JSON.parse Failed to parse json",
+    # Playwright 1.50 to 1.64 (at least) word it the same.
+    "Error: Failed to load tsconfig file at /workspace/project/tsconfig.json:\nJSON5: invalid character ']' at 12:1",
 ])
 def test_a_build_file_that_no_longer_parses_is_a_build_failure(output: str) -> None:
     result = classify_failure(1, output, [])
 
     assert (result.kind, result.healable) == (FailureKind.BUILD_FAILURE, True)
+
+
+# Real JUnit reports and console output of fixtures/playwright_junit/demo.spec.ts, run in the agents' sandbox image
+# with NG Automate's command (PLAYWRIGHT_JUNIT_OUTPUT_NAME=ngauto-results/junit.xml npx playwright test --reporter=junit).
+# Up to Playwright 1.58 a failure's message is only the test's location and title ("demo.spec.ts:8:5 clicks a missing
+# element") and the error is in the details; from 1.59 on, the message is the error.
+PLAYWRIGHT_RUNS = Path(__file__).parent / "fixtures" / "playwright_junit"
+PLAYWRIGHT_VERSIONS = ["1.50.1", "1.58.2", "1.64.1"]
+PLAYWRIGHT_SETUP = SETUP_NOTE.format(command="npm ci && npx playwright install chromium")
+
+
+def _playwright_output(name: str) -> str:
+    return (PLAYWRIGHT_RUNS / name).read_text(encoding="utf-8")
+
+
+def _playwright_case(version: str, name: str) -> TestCaseResultModel:
+    return next(case for case in parse_report_file(PLAYWRIGHT_RUNS / f"{version}-junit.xml") if case.name == name)
+
+
+@pytest.mark.parametrize("version", PLAYWRIGHT_VERSIONS)
+def test_a_playwright_locator_timeout_goes_to_the_healer_with_its_error(version: str) -> None:
+    case = _playwright_case(version, "clicks a missing element")
+
+    result = classify_failure(1, _playwright_output(f"{version}-output.txt"), [case])
+
+    assert (result.kind, result.healable) == (FailureKind.LOCATOR_FAILURE, True)
+    # The healer reads only these lines for a locator failure: they hold the error, not just the test's name.
+    [line] = result.evidence
+    assert "locator.click: Timeout 2000ms exceeded." in line
+    assert line.endswith("(at /workspace/project/tests/demo.spec.ts:10:41)")
+
+
+@pytest.mark.parametrize("version", PLAYWRIGHT_VERSIONS)
+def test_a_playwright_type_error_in_the_test_code_goes_to_the_healer(version: str) -> None:
+    case = _playwright_case(version, "checkout › calls a method that does not exist")
+
+    result = classify_failure(1, _playwright_output(f"{version}-output.txt"), [case])
+
+    assert (result.kind, result.healable) == (FailureKind.TEST_CODE_FAILURE, True)
+    assert "page.typeInto is not a function" in result.evidence[0]
+
+
+@pytest.mark.parametrize("version", PLAYWRIGHT_VERSIONS)
+def test_a_failed_playwright_check_stays_with_the_user_though_its_call_log_waits_for_a_locator(version: str) -> None:
+    case = _playwright_case(version, "checkout › checks the wrong text")
+    assert "waiting for locator('#title')" in (case.details or "")
+
+    result = classify_failure(1, _playwright_output(f"{version}-output.txt"), [case])
+
+    assert (result.kind, result.healable) == (FailureKind.TEST_FAILURE, False)
+    assert "toHaveText" in result.evidence[0]
+
+
+@pytest.mark.parametrize("version", PLAYWRIGHT_VERSIONS)
+def test_a_playwright_run_after_ng_automates_setup_note_is_decided_by_its_tests(version: str) -> None:
+    # As TestRunner builds it: NG Automate's note on the setup it ran, the setup's output, then the tests' output.
+    tests_output = _playwright_output(f"{version}-output.txt")
+    output = f"{PLAYWRIGHT_SETUP}added 3 packages in 2s\n{tests_output}"
+    cases = parse_report_file(PLAYWRIGHT_RUNS / f"{version}-junit.xml")
+
+    result = classify_failure(1, output, cases)
+
+    # Two of the three failures are technical (a locator, the test code): the healer's job, not an environment one.
+    assert (result.kind, result.healable) == (FailureKind.LOCATOR_FAILURE, True)
+    assert "locator.click: Timeout 2000ms exceeded." in result.evidence[0]
+
+
+def test_ng_automates_own_setup_note_is_never_read_as_the_projects_failure() -> None:
+    # A real run's output: the setup note names "npx playwright install chromium", which made this run an environment
+    # failure with the note as its only evidence; the real error is a tsconfig.json that does not parse.
+    output = _playwright_output("tsconfig-error-output-tail.txt")
+    assert output.startswith(PLAYWRIGHT_SETUP.strip())
+
+    result = classify_failure(1, output, [])
+
+    # A project file that no longer loads, for the healer (not a missing browser). The evidence is Playwright's error,
+    # not the stack frames under it (node_modules/.../index.js:753:11 names a file and line, like a compiler error).
+    assert (result.kind, result.healable) == (FailureKind.BUILD_FAILURE, True)
+    assert result.evidence == ["Error: Failed to load tsconfig file at /workspace/project/tsconfig.json:"]
+
+
+def test_a_missing_browser_is_still_found_after_ng_automates_setup_note() -> None:
+    # A real run without the browser: Playwright's own output says "npx playwright install" too. Only our note is
+    # skipped; the project's own lines still make it an environment failure.
+    output = f"{PLAYWRIGHT_SETUP}added 3 packages in 2s\n{_playwright_output('1.58.2-no-browser-output.txt')}"
+
+    result = classify_failure(1, output, [])
+
+    assert (result.kind, result.healable) == (FailureKind.ENVIRONMENT_FAILURE, True)
+    assert result.evidence[0].startswith("Error: browserType.launch: Executable doesn't exist at ")
+    assert any("npx playwright install" in line for line in result.evidence)
+    assert not any(line.startswith(OWN_NOTE_PREFIX) for line in result.evidence)
+
+
+def test_a_message_that_starts_with_another_place_is_read_as_before() -> None:
+    # Only a message that names the test itself (its location, then its own title) is replaced by the details' error.
+    # This one starts with a file, line and column too (a type checker's error), but it is the error itself.
+    error = "cart.ts:12:5 - error TS2339: Property 'total' does not exist on type 'Cart'."
+    case = TestCaseResultModel(
+        name="shows the cart total", suite="cart.test.ts", status=TestCaseStatus.FAILED, message=error,
+        details=f"  ● shows the cart total\n\n    {error}",
+    )
+
+    result = classify_failure(1, "1 failed", [case])
+
+    assert result.evidence == [f"cart.test.ts.shows the cart total: {error}"]

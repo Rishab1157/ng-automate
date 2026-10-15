@@ -219,7 +219,7 @@ class MasterNodes:
             ),
             lambda session: self.generator_factory(llm_config).generate(
                 session.workspace, project_dir, data_set, fact_sheet, profile.findings, command, bridge.on_event,
-                control=agent_control(run_id),
+                control=agent_control(run_id), instructions=state.get("instructions"),
             ),
         )
         await self.run_service.save_outputs(run_id, generation=outcome)
@@ -296,6 +296,7 @@ class MasterNodes:
                     lambda: healer.heal(
                         session.workspace, project_dir, result, command, fact_sheet, bridge.on_event,
                         previous, control=agent_control(run_id), time_limit=time_limit, memories=memories,
+                        instructions=state.get("instructions"),
                     )
                 )
                 budget_left -= outcome.seconds

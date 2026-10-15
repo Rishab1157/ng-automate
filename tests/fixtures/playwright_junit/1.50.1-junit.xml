@@ -1,0 +1,70 @@
+<testsuites id="" name="" tests="4" failures="3" skipped="0" errors="0" time="180.283712">
+<testsuite name="demo.spec.ts" timestamp="2026-10-15T07:30:16.771Z" hostname="chromium" tests="4" failures="3" skipped="0" time="5.518" errors="0">
+<testcase name="passes" classname="demo.spec.ts" time="0.658">
+</testcase>
+<testcase name="clicks a missing element" classname="demo.spec.ts" time="2.046">
+<failure message="demo.spec.ts:8:5 clicks a missing element" type="FAILURE">
+<![CDATA[  [chromium] › demo.spec.ts:8:5 › clicks a missing element ─────────────────────────────────────────
+
+    TimeoutError: locator.click: Timeout 2000ms exceeded.
+    Call log:
+      - waiting for locator('#missing-button')
+
+
+       8 | test('clicks a missing element', async ({ page }) => {
+       9 |   await page.setContent('<button id="save">Save</button>');
+    > 10 |   await page.locator('#missing-button').click({ timeout: 2000 });
+         |                                         ^
+      11 | });
+      12 |
+      13 | test.describe('checkout', () => {
+        at /workspace/project/tests/demo.spec.ts:10:41
+]]>
+</failure>
+</testcase>
+<testcase name="checkout › calls a method that does not exist" classname="demo.spec.ts" time="0.365">
+<failure message="demo.spec.ts:14:7 calls a method that does not exist" type="FAILURE">
+<![CDATA[  [chromium] › demo.spec.ts:14:7 › checkout › calls a method that does not exist ───────────────────
+
+    TypeError: page.typeInto is not a function
+
+      14 |   test('calls a method that does not exist', async ({ page }) => {
+      15 |     await page.setContent('<input id="first-name">');
+    > 16 |     await (page as any).typeInto('#first-name', 'Ada');
+         |                         ^
+      17 |   });
+      18 |
+      19 |   test('checks the wrong text', async ({ page }) => {
+        at /workspace/project/tests/demo.spec.ts:16:25
+]]>
+</failure>
+</testcase>
+<testcase name="checkout › checks the wrong text" classname="demo.spec.ts" time="2.449">
+<failure message="demo.spec.ts:19:7 checks the wrong text" type="FAILURE">
+<![CDATA[  [chromium] › demo.spec.ts:19:7 › checkout › checks the wrong text ────────────────────────────────
+
+    Error: Timed out 2000ms waiting for expect(locator).toHaveText(expected)
+
+    Locator: locator('#title')
+    Expected string: "wrong"
+    Received string: "Products"
+    Call log:
+      - expect.toHaveText with timeout 2000ms
+      - waiting for locator('#title')
+        6 × locator resolved to <h1 id="title">Products</h1>
+          - unexpected value "Products"
+
+
+      19 |   test('checks the wrong text', async ({ page }) => {
+      20 |     await page.setContent('<h1 id="title">Products</h1>');
+    > 21 |     await expect(page.locator('#title')).toHaveText('wrong', { timeout: 2000 });
+         |                                          ^
+      22 |   });
+      23 | });
+      24 |
+        at /workspace/project/tests/demo.spec.ts:21:42
+]]>
+</failure>
+</testcase>
+</testsuite>
+</testsuites>

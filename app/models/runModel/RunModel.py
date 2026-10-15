@@ -20,6 +20,8 @@ class RunStatus(str, Enum):
 
 # A run in one of these states still works on its project's files.
 UNFINISHED_RUN_STATUSES = (RunStatus.QUEUED.value, RunStatus.RUNNING.value)
+# The user's own instructions for a run's agents: a few sentences, shown to a small local model on every request.
+MAX_RUN_INSTRUCTIONS_CHARS = 4000
 
 
 class RunMode(str, Enum):
@@ -151,6 +153,8 @@ class RunModel(BaseModel):
     test_files: list[str] | None = None
     # Generate mode: the uploaded test data to write tests from.
     test_data_id: str | None = None
+    # Generate and test modes: the user's own instructions for the run's agents (generator, healer), given at start.
+    instructions: str | None = None
     status: RunStatus
     stage: RunStage
     outputs: RunOutputsModel = Field(default_factory=RunOutputsModel)

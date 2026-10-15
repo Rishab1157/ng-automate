@@ -9,6 +9,7 @@ RUN_DETAIL_PROJECTION = {
     "test_selector": 1,
     "test_files": 1,
     "test_data_id": 1,
+    "instructions": 1,
     "status": 1,
     "stage": 1,
     "outputs": 1,

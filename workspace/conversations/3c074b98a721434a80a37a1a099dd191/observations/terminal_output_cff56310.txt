@@ -1,0 +1,432 @@
+/workspace/project:
+README.md  fixtures  ngauto  node_modules  package-lock.json  package.json  pages  playwright-report  playwright.config.js  playwright.config.ts  test-results  tests  tsconfig.json
+
+/workspace/project/fixtures:
+test.d.ts  test.js  test.ts
+
+/workspace/project/ngauto:
+TD-001-valid-login.spec.ts  TD-002-invalid-password.spec.ts  TD-003-locked-out-user.spec.ts
+
+/workspace/project/node_modules:
+@babel      @jridgewell  @tsconfig    acorn        arg      color-convert   diff                  graceful-fs  jest-matcher-utils  jest-regex-util  make-error  playwright       slash           ts-node       v8-compile-cache-lib
+@cspotcode  @playwright  @types       acorn-walk   chalk    color-name      escape-string-regexp  has-flag     jest-message-util   jest-util        picocolors  playwright-core  stack-utils     typescript    yn
+@jest       @sinclair    @typescript  ansi-styles  ci-info  create-require  expect                jest-diff    jest-mock           js-tokens        picomatch   pretty-format    supports-color  undici-types
+
+/workspace/project/node_modules/@babel:
+code-frame  helper-validator-identifier
+
+/workspace/project/node_modules/@babel/code-frame:
+LICENSE  README.md  lib  package.json
+
+/workspace/project/node_modules/@babel/code-frame/lib:
+index.js  index.js.map
+
+/workspace/project/node_modules/@babel/helper-validator-identifier:
+LICENSE  README.md  lib  package.json
+
+/workspace/project/node_modules/@babel/helper-validator-identifier/lib:
+identifier.js  identifier.js.map  index.js  index.js.map  keyword.js  keyword.js.map
+
+/workspace/project/node_modules/@cspotcode:
+source-map-support
+
+/workspace/project/node_modules/@cspotcode/source-map-support:
+LICENSE.md  README.md  browser-source-map-support.js  package.json  register-hook-require.d.ts  register-hook-require.js  register.d.ts  register.js  source-map-support.d.ts  source-map-support.js
+
+/workspace/project/node_modules/@jest:
+diff-sequences  expect-utils  get-type  pattern  react-is-18  react-is-19  schemas  types
+
+/workspace/project/node_modules/@jest/diff-sequences:
+LICENSE  README.md  build  package.json
+
+/workspace/project/node_modules/@jest/diff-sequences/build:
+index.d.ts  index.js  index.mjs
+
+/workspace/project/node_modules/@jest/expect-utils:
+LICENSE  README.md  build  package.json
+
+/workspace/project/node_modules/@jest/expect-utils/build:
+index.d.ts  index.js  index.mjs
+
+/workspace/project/node_modules/@jest/get-type:
+LICENSE  build  package.json
+
+/workspace/project/node_modules/@jest/get-type/build:
+index.d.ts  index.js  index.mjs
+
+/workspace/project/node_modules/@jest/pattern:
+LICENSE  README.md  api-extractor.json  build  package.json  src  tsconfig.json
+
+/workspace/project/node_modules/@jest/pattern/build:
+index.d.ts  index.js  index.mjs
+
+/workspace/project/node_modules/@jest/pattern/src:
+TestPathPatterns.ts  __tests__  index.ts
+
+/workspace/project/node_modules/@jest/pattern/src/__tests__:
+TestPathPatterns.test.ts  __snapshots__
+
+/workspace/project/node_modules/@jest/pattern/src/__tests__/__snapshots__:
+TestPathPatterns.test.ts.snap
+
+/workspace/project/node_modules/@jest/react-is-18:
+LICENSE  README.md  cjs  index.js  package.json  umd
+
+/workspace/project/node_modules/@jest/react-is-18/cjs:
+react-is.development.js  react-is.production.min.js
+
+/workspace/project/node_modules/@jest/react-is-18/umd:
+react-is.development.js  react-is.production.min.js
+
+/workspace/project/node_modules/@jest/react-is-19:
+LICENSE  README.md  cjs  index.js  package.json
+
+/workspace/project/node_modules/@jest/react-is-19/cjs:
+react-is.development.js  react-is.production.js
+
+/workspace/project/node_modules/@jest/schemas:
+LICENSE  README.md  build  package.json
+
+/workspace/project/node_modules/@jest/schemas/build:
+index.d.ts  index.js  index.mjs
+
+/workspace/project/node_modules/@jest/types:
+LICENSE  README.md  build  package.json
+
+/workspace/project/node_modules/@jest/types/build:
+index.d.ts  index.js
+
+/workspace/project/node_modules/@jridgewell:
+resolve-uri  sourcemap-codec  trace-mapping
+
+/workspace/project/node_modules/@jridgewell/resolve-uri:
+LICENSE  README.md  dist  package.json
+
+/workspace/project/node_modules/@jridgewell/resolve-uri/dist:
+resolve-uri.mjs  resolve-uri.mjs.map  resolve-uri.umd.js  resolve-uri.umd.js.map  types
+
+/workspace/project/node_modules/@jridgewell/resolve-uri/dist/types:
+resolve-uri.d.ts
+
+/workspace/project/node_modules/@jridgewell/sourcemap-codec:
+LICENSE  README.md  dist  package.json  src  types
+
+/workspace/project/node_modules/@jridgewell/sourcemap-codec/dist:
+sourcemap-codec.mjs  sourcemap-codec.mjs.map  sourcemap-codec.umd.js  sourcemap-codec.umd.js.map
+
+/workspace/project/node_modules/@jridgewell/sourcemap-codec/src:
+range-mappings.ts  scopes.ts  sourcemap-codec.ts  strings.ts  vlq.ts
+
+/workspace/project/node_modules/@jridgewell/sourcemap-codec/types:
+range-mappings.d.cts      range-mappings.d.mts      scopes.d.cts      scopes.d.mts      sourcemap-codec.d.cts      sourcemap-codec.d.mts      strings.d.cts      strings.d.mts      vlq.d.cts      vlq.d.mts
+range-mappings.d.cts.map  range-mappings.d.mts.map  scopes.d.cts.map  scopes.d.mts.map  sourcemap-codec.d.cts.map  sourcemap-codec.d.mts.map  strings.d.cts.map  strings.d.mts.map  vlq.d.cts.map  vlq.d.mts.map
+
+/workspace/project/node_modules/@jridgewell/trace-mapping:
+LICENSE  README.md  dist  package.json
+
+/workspace/project/node_modules/@jridgewell/trace-mapping/dist:
+trace-mapping.mjs  trace-mapping.mjs.map  trace-mapping.umd.js  trace-mapping.umd.js.map  types
+
+/workspace/project/node_modules/@jridgewell/trace-mapping/dist/types:
+any-map.d.ts  binary-search.d.ts  by-source.d.ts  resolve.d.ts  sort.d.ts  sourcemap-segment.d.ts  strip-filename.d.ts  trace-mapping.d.ts  types.d.ts
+
+/workspace/project/node_modules/@playwright:
+test
+
+/workspace/project/node_modules/@playwright/test:
+LICENSE  NOTICE  README.md  cli.js  index.d.ts  index.js  index.mjs  package.json  reporter.d.ts  reporter.js  reporter.mjs
+
+/workspace/project/node_modules/@sinclair:
+typebox
+
+/workspace/project/node_modules/@sinclair/typebox:
+build  compiler  errors  license  package.json  parser  readme.md  syntax  system  type  value
+
+/workspace/project/node_modules/@sinclair/typebox/build:
+cjs  esm
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs:
+compiler  errors  index.d.ts  index.js  parser  syntax  system  type  value
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/compiler:
+compiler.d.ts  compiler.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/errors:
+errors.d.ts  errors.js  function.d.ts  function.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/parser:
+index.d.ts  index.js  runtime  static
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/parser/runtime:
+guard.d.ts  guard.js  index.d.ts  index.js  module.d.ts  module.js  parse.d.ts  parse.js  token.d.ts  token.js  types.d.ts  types.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/parser/static:
+index.d.ts  index.js  parse.d.ts  parse.js  token.d.ts  token.js  types.d.ts  types.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/syntax:
+index.d.ts  index.js  mapping.d.ts  mapping.js  parser.d.ts  parser.js  syntax.d.ts  syntax.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/system:
+evaluate.d.ts  evaluate.js  index.d.ts  index.js  policy.d.ts  policy.js  system.d.ts  system.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type:
+any             awaited  composite    constructor-parameters  enum     extract   index.d.ts     instantiate  iterator  module  number    parameters  promise            recursive  required     sets    symbols           type        unknown
+argument        bigint   computed     create                  error    function  index.js       integer      keyof     never   object    partial     readonly           ref        rest         static  template-literal  uint8array  unsafe
+array           boolean  const        date                    exclude  guard     indexed        intersect    literal   not     omit      patterns    readonly-optional  regexp     return-type  string  transform         undefined   void
+async-iterator  clone    constructor  discard                 extends  helpers   instance-type  intrinsic    mapped    null    optional  pick        record             registry   schema       symbol  tuple             union
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/any:
+any.d.ts  any.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/argument:
+argument.d.ts  argument.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/array:
+array.d.ts  array.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/async-iterator:
+async-iterator.d.ts  async-iterator.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/awaited:
+awaited.d.ts  awaited.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/bigint:
+bigint.d.ts  bigint.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/boolean:
+boolean.d.ts  boolean.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/clone:
+index.d.ts  index.js  type.d.ts  type.js  value.d.ts  value.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/composite:
+composite.d.ts  composite.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/computed:
+computed.d.ts  computed.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/const:
+const.d.ts  const.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/constructor:
+constructor.d.ts  constructor.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/constructor-parameters:
+constructor-parameters.d.ts  constructor-parameters.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/create:
+immutable.d.ts  immutable.js  index.d.ts  index.js  type.d.ts  type.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/date:
+date.d.ts  date.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/discard:
+discard.d.ts  discard.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/enum:
+enum.d.ts  enum.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/error:
+error.d.ts  error.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/exclude:
+exclude-from-mapped-result.d.ts  exclude-from-mapped-result.js  exclude-from-template-literal.d.ts  exclude-from-template-literal.js  exclude.d.ts  exclude.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/extends:
+extends-check.d.ts  extends-check.js  extends-from-mapped-key.d.ts  extends-from-mapped-key.js  extends-from-mapped-result.d.ts  extends-from-mapped-result.js  extends-undefined.d.ts  extends-undefined.js  extends.d.ts  extends.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/extract:
+extract-from-mapped-result.d.ts  extract-from-mapped-result.js  extract-from-template-literal.d.ts  extract-from-template-literal.js  extract.d.ts  extract.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/function:
+function.d.ts  function.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/guard:
+index.d.ts  index.js  kind.d.ts  kind.js  type.d.ts  type.js  value.d.ts  value.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/helpers:
+helpers.d.ts  helpers.js  index.d.ts  index.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/indexed:
+index.d.ts  index.js  indexed-from-mapped-key.d.ts  indexed-from-mapped-key.js  indexed-from-mapped-result.d.ts  indexed-from-mapped-result.js  indexed-property-keys.d.ts  indexed-property-keys.js  indexed.d.ts  indexed.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/instance-type:
+index.d.ts  index.js  instance-type.d.ts  instance-type.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/instantiate:
+index.d.ts  index.js  instantiate.d.ts  instantiate.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/integer:
+index.d.ts  index.js  integer.d.ts  integer.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/intersect:
+index.d.ts  index.js  intersect-create.d.ts  intersect-create.js  intersect-evaluated.d.ts  intersect-evaluated.js  intersect-type.d.ts  intersect-type.js  intersect.d.ts  intersect.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/intrinsic:
+capitalize.d.ts  capitalize.js  index.d.ts  index.js  intrinsic-from-mapped-key.d.ts  intrinsic-from-mapped-key.js  intrinsic.d.ts  intrinsic.js  lowercase.d.ts  lowercase.js  uncapitalize.d.ts  uncapitalize.js  uppercase.d.ts  uppercase.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/iterator:
+index.d.ts  index.js  iterator.d.ts  iterator.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/keyof:
+index.d.ts  index.js  keyof-from-mapped-result.d.ts  keyof-from-mapped-result.js  keyof-property-entries.d.ts  keyof-property-entries.js  keyof-property-keys.d.ts  keyof-property-keys.js  keyof.d.ts  keyof.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/literal:
+index.d.ts  index.js  literal.d.ts  literal.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/mapped:
+index.d.ts  index.js  mapped-key.d.ts  mapped-key.js  mapped-result.d.ts  mapped-result.js  mapped.d.ts  mapped.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/module:
+compute.d.ts  compute.js  index.d.ts  index.js  infer.d.ts  infer.js  module.d.ts  module.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/never:
+index.d.ts  index.js  never.d.ts  never.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/not:
+index.d.ts  index.js  not.d.ts  not.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/null:
+index.d.ts  index.js  null.d.ts  null.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/number:
+index.d.ts  index.js  number.d.ts  number.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/object:
+index.d.ts  index.js  object.d.ts  object.js
+
+/workspace/project/node_modules/@sinclair/typebox/build/cjs/type/omit:
+index.d.ts  index.js  omit-from-mapped-key.d.ts  omit-from-mapped-key.js  omit-from-mapped-result.d.ts  omit-from-mapped-result.js  omit.d.ts  omit.js
+
+/workspace/project/node_modul<response clipped><NOTE>Due to the max output limit, only part of the full response has been shown to you.</NOTE>swc.js
+
+/workspace/project/node_modules/typescript:
+LICENSE  NOTICE.txt  README.md  bin  dist  lib  package.json  vendor
+
+/workspace/project/node_modules/typescript/bin:
+tsc
+
+/workspace/project/node_modules/typescript/dist:
+api  ast  enums  internal
+
+/workspace/project/node_modules/typescript/dist/api:
+async                     compilerOptions.js      fs.d.ts.map  node              options.js      path.d.ts.map  proto.d.ts      proto.js.map              sourceFileCache.js      syncChannel.d.ts      syncChannel.js.map  timing.js
+compilerOptions.d.ts      compilerOptions.js.map  fs.js        options.d.ts      options.js.map  path.js        proto.d.ts.map  sourceFileCache.d.ts      sourceFileCache.js.map  syncChannel.d.ts.map  timing.d.ts         timing.js.map
+compilerOptions.d.ts.map  fs.d.ts                 fs.js.map    options.d.ts.map  path.d.ts       path.js.map    proto.js        sourceFileCache.d.ts.map  sync                    syncChannel.js        timing.d.ts.map
+
+/workspace/project/node_modules/typescript/dist/api/async:
+api.d.ts  api.d.ts.map  api.js  api.js.map  client.d.ts  client.d.ts.map  client.js  client.js.map  types.d.ts  types.d.ts.map  types.js  types.js.map
+
+/workspace/project/node_modules/typescript/dist/api/node:
+encoder.d.ts                encoder.generated.js      msgpack.d.ts      node.d.ts                node.generated.js             node.infrastructure.js      protocol.d.ts                protocol.generated.js      wtf8.d.ts
+encoder.d.ts.map            encoder.generated.js.map  msgpack.d.ts.map  node.d.ts.map            node.generated.js.map         node.infrastructure.js.map  protocol.d.ts.map            protocol.generated.js.map  wtf8.d.ts.map
+encoder.generated.d.ts      encoder.js                msgpack.js        node.generated.d.ts      node.infrastructure.d.ts      node.js                     protocol.generated.d.ts      protocol.js                wtf8.js
+encoder.generated.d.ts.map  encoder.js.map            msgpack.js.map    node.generated.d.ts.map  node.infrastructure.d.ts.map  node.js.map                 protocol.generated.d.ts.map  protocol.js.map            wtf8.js.map
+
+/workspace/project/node_modules/typescript/dist/api/sync:
+api.d.ts  api.d.ts.map  api.js  api.js.map  client.d.ts  client.d.ts.map  client.js  client.js.map  types.d.ts  types.d.ts.map  types.js  types.js.map
+
+/workspace/project/node_modules/typescript/dist/ast:
+ast.d.ts                ast.generated.js.map  astnav.js       clone.js.map                index.d.ts      is.d.ts.map            is.js           jsdoc.js.map      utils.d.ts      visitor.d.ts.map            visitor.js
+ast.d.ts.map            ast.js                astnav.js.map   factory.generated.d.ts      index.d.ts.map  is.generated.d.ts      is.js.map       scanner.d.ts      utils.d.ts.map  visitor.generated.d.ts      visitor.js.map
+ast.generated.d.ts      ast.js.map            clone.d.ts      factory.generated.d.ts.map  index.js        is.generated.d.ts.map  jsdoc.d.ts      scanner.d.ts.map  utils.js        visitor.generated.d.ts.map
+ast.generated.d.ts.map  astnav.d.ts           clone.d.ts.map  factory.generated.js        index.js.map    is.generated.js        jsdoc.d.ts.map  scanner.js        utils.js.map    visitor.generated.js
+ast.generated.js        astnav.d.ts.map       clone.js        factory.generated.js.map    is.d.ts         is.generated.js.map    jsdoc.js        scanner.js.map    visitor.d.ts    visitor.generated.js.map
+
+/workspace/project/node_modules/typescript/dist/enums:
+characterCodes.d.ts                 diagnosticCategory.js.map         languageVariant.js                  moduleResolutionKind.enum.js.map  objectFlags.enum.js                   scriptTarget.enum.d.ts.map    syntaxKind.enum.d.ts
+characterCodes.d.ts.map             elementFlags.d.ts                 languageVariant.js.map              moduleResolutionKind.js           objectFlags.enum.js.map               scriptTarget.enum.js          syntaxKind.enum.d.ts.map
+characterCodes.enum.d.ts            elementFlags.d.ts.map             modifierFlags.d.ts                  moduleResolutionKind.js.map       objectFlags.js                        scriptTarget.enum.js.map      syntaxKind.enum.js
+characterCodes.enum.d.ts.map        elementFlags.enum.d.ts            modifierFlags.d.ts.map              newLineKind.d.ts                  objectFlags.js.map                    scriptTarget.js               syntaxKind.enum.js.map
+characterCodes.enum.js              elementFlags.enum.d.ts.map        modifierFlags.enum.d.ts             newLineKind.d.ts.map              outerExpressionKinds.d.ts             scriptTarget.js.map           syntaxKind.js
+characterCodes.enum.js.map          elementFlags.enum.js              modifierFlags.enum.d.ts.map         newLineKind.enum.d.ts             outerExpressionKinds.d.ts.map         signatureFlags.d.ts           syntaxKind.js.map
+characterCodes.js                   elementFlags.enum.js.map          modifierFlags.enum.js               newLineKind.enum.d.ts.map         outerExpressionKinds.enum.d.ts        signatureFlags.d.ts.map       tokenFlags.d.ts
+characterCodes.js.map               elementFlags.js                   modifierFlags.enum.js.map           newLineKind.enum.js               outerExpressionKinds.enum.d.ts.map    signatureFlags.enum.d.ts      tokenFlags.d.ts.map
+commentDirectiveType.d.ts           elementFlags.js.map               modifierFlags.js                    newLineKind.enum.js.map           outerExpressionKinds.enum.js          signatureFlags.enum.d.ts.map  tokenFlags.enum.d.ts
+commentDirectiveType.d.ts.map       internalSymbolName.d.ts           modifierFlags.js.map                newLineKind.js                    outerExpressionKinds.enum.js.map      signatureFlags.enum.js        tokenFlags.enum.d.ts.map
+commentDirectiveType.enum.d.ts      internalSymbolName.d.ts.map       moduleDetectionKind.d.ts            newLineKind.js.map                outerExpressionKinds.js               signatureFlags.enum.js.map    tokenFlags.enum.js
+commentDirectiveType.enum.d.ts.map  internalSymbolName.enum.d.ts      moduleDetectionKind.d.ts.map        nodeBuilderFlags.d.ts             outerExpressionKinds.js.map           signatureFlags.js             tokenFlags.enum.js.map
+commentDirectiveType.enum.js        internalSymbolName.enum.d.ts.map  moduleDetectionKind.enum.d.ts       nodeBuilderFlags.d.ts.map         regularExpressionFlags.d.ts           signatureFlags.js.map         tokenFlags.js
+commentDirectiveType.enum.js.map    internalSymbolName.enum.js        moduleDetectionKind.enum.d.ts.map   nodeBuilderFlags.enum.d.ts        regularExpressionFlags.d.ts.map       signatureKind.d.ts            tokenFlags.js.map
+commentDirectiveType.js             internalSymbolName.enum.js.map    moduleDetectionKind.enum.js         nodeBuilderFlags.enum.d.ts.map    regularExpressionFlags.enum.d.ts      signatureKind.d.ts.map        typeFlags.d.ts
+commentDirectiveType.js.map         internalSymbolName.js             moduleDetectionKind.enum.js.map     nodeBuilderFlags.enum.js          regularExpressionFlags.enum.d.ts.map  signatureKind.enum.d.ts       typeFlags.d.ts.map
+completionItemKind.d.ts             internalSymbolName.js.map         moduleDetectionKind.js              nodeBuilderFlags.enum.js.map      regularExpressionFlags.enum.js        signatureKind.enum.d.ts.map   typeFlags.enum.d.ts
+completionItemKind.d.ts.map         jsxEmit.d.ts                      moduleDetectionKind.js.map          nodeBuilderFlags.js               regularExpressionFlags.enum.js.map    signatureKind.enum.js         typeFlags.enum.d.ts.map
+completionItemKind.enum.d.ts        jsxEmit.d.ts.map                  moduleKind.d.ts                     nodeBuilderFlags.js.map           regularExpressionFlags.js             signatureKind.enum.js.map     typeFlags.enum.js
+completionItemKind.enum.d.ts.map    jsxEmit.enum.d.ts                 moduleKind.d.ts.map                 nodeFlags.d.ts                    regularExpressionFlags.js.map         signatureKind.js              typeFlags.enum.js.map
+completionItemKind.enum.js          jsxEmit.enum.d.ts.map             moduleKind.enum.d.ts                nodeFlags.d.ts.map                scriptKind.d.ts                       signatureKind.js.map          typeFlags.js
+completionItemKind.enum.js.map      jsxEmit.enum.js                   moduleKind.enum.d.ts.map            nodeFlags.enum.d.ts               scriptKind.d.ts.map                   symbolFlags.d.ts              typeFlags.js.map
+completionItemKind.js               jsxEmit.enum.js.map               moduleKind.enum.js                  nodeFlags.enum.d.ts.map           scriptKind.enum.d.ts                  symbolFlags.d.ts.map          typePredicateKind.d.ts
+completionItemKind.js.map           jsxEmit.js                        moduleKind.enum.js.map              nodeFlags.enum.js                 scriptKind.enum.d.ts.map              symbolFlags.enum.d.ts         typePredicateKind.d.ts.map
+diagnosticCategory.d.ts             jsxEmit.js.map                    moduleKind.js                       nodeFlags.enum.js.map             scriptKind.enum.js                    symbolFlags.enum.d.ts.map     typePredicateKind.enum.d.ts
+diagnosticCategory.d.ts.map         languageVariant.d.ts              moduleKind.js.map                   nodeFlags.js                      scriptKind.enum.js.map                symbolFlags.enum.js           typePredicateKind.enum.d.ts.map
+diagnosticCategory.enum.d.ts        languageVariant.d.ts.map          moduleResolutionKind.d.ts           nodeFlags.js.map                  scriptKind.js                         symbolFlags.enum.js.map       typePredicateKind.enum.js
+diagnosticCategory.enum.d.ts.map    languageVariant.enum.d.ts         moduleResolutionKind.d.ts.map       objectFlags.d.ts                  scriptKind.js.map                     symbolFlags.js                typePredicateKind.enum.js.map
+diagnosticCategory.enum.js          languageVariant.enum.d.ts.map     moduleResolutionKind.enum.d.ts      objectFlags.d.ts.map              scriptTarget.d.ts                     symbolFlags.js.map            typePredicateKind.js
+diagnosticCategory.enum.js.map      languageVariant.enum.js           moduleResolutionKind.enum.d.ts.map  objectFlags.enum.d.ts             scriptTarget.d.ts.map                 syntaxKind.d.ts               typePredicateKind.js.map
+diagnosticCategory.js               languageVariant.enum.js.map       moduleResolutionKind.enum.js        objectFlags.enum.d.ts.map         scriptTarget.enum.d.ts                syntaxKind.d.ts.map
+
+/workspace/project/node_modules/typescript/dist/internal:
+utils.d.ts  utils.d.ts.map  utils.js  utils.js.map
+
+/workspace/project/node_modules/typescript/lib:
+getExePath.d.ts  getExePath.js  tsc.js  version.cjs  version.d.cts
+
+/workspace/project/node_modules/typescript/vendor:
+vscode-jsonrpc
+
+/workspace/project/node_modules/typescript/vendor/vscode-jsonrpc:
+License.txt  README.md  lib  package.json  typings
+
+/workspace/project/node_modules/typescript/vendor/vscode-jsonrpc/lib:
+browser  common  node
+
+/workspace/project/node_modules/typescript/vendor/vscode-jsonrpc/lib/browser:
+main.d.ts  main.js  ril.d.ts  ril.js
+
+/workspace/project/node_modules/typescript/vendor/vscode-jsonrpc/lib/common:
+api.d.ts  cancellation.d.ts  connection.d.ts  disposable.d.ts  encoding.d.ts  events.d.ts  is.d.ts  linkedMap.d.ts  messageBuffer.d.ts  messageReader.d.ts  messageWriter.d.ts  messages.d.ts  ral.d.ts  semaphore.d.ts  sharedArrayCancellation.d.ts
+api.js    cancellation.js    connection.js    disposable.js    encoding.js    events.js    is.js    linkedMap.js    messageBuffer.js    messageReader.js    messageWriter.js    messages.js    ral.js    semaphore.js    sharedArrayCancellation.js
+
+/workspace/project/node_modules/typescript/vendor/vscode-jsonrpc/lib/node:
+main.d.ts  main.js  ril.d.ts  ril.js
+
+/workspace/project/node_modules/typescript/vendor/vscode-jsonrpc/typings:
+thenable.d.ts
+
+/workspace/project/node_modules/undici-types:
+LICENSE     balanced-pool.d.ts      client.d.ts        diagnostics-channel.d.ts   errors.d.ts       global-dispatcher.d.ts  header.d.ts        mock-call-history.d.ts  mock-pool.d.ts   pool.d.ts         retry-handler.d.ts       util.d.ts
+README.md   cache-interceptor.d.ts  connector.d.ts     dispatcher.d.ts            eventsource.d.ts  global-origin.d.ts      index.d.ts         mock-client.d.ts        package.json     proxy-agent.d.ts  round-robin-pool.d.ts    utility.d.ts
+agent.d.ts  cache.d.ts              content-type.d.ts  dispatcher1-wrapper.d.ts   fetch.d.ts        h2c-client.d.ts         interceptors.d.ts  mock-errors.d.ts        patch.d.ts       readable.d.ts     snapshot-agent.d.ts      webidl.d.ts
+api.d.ts    client-stats.d.ts       cookies.d.ts       env-http-proxy-agent.d.ts  formdata.d.ts     handlers.d.ts           mock-agent.d.ts    mock-interceptor.d.ts   pool-stats.d.ts  retry-agent.d.ts  socks5-proxy-agent.d.ts  websocket.d.ts
+
+/workspace/project/node_modules/v8-compile-cache-lib:
+CHANGELOG.md  LICENSE  README.md  package.json  v8-compile-cache.d.ts  v8-compile-cache.js
+
+/workspace/project/node_modules/yn:
+index.d.ts  index.js  lenient.js  license  package.json  readme.md
+
+/workspace/project/pages:
+BasePage.js  BasePage.ts  CartPage.js  CartPage.ts  CheckoutPage.js  CheckoutPage.ts  InventoryPage.js  InventoryPage.ts  LoginPage.d.ts  LoginPage.js  LoginPage.ts
+
+/workspace/project/playwright-report:
+index.html
+
+/workspace/project/test-results:
+
+/workspace/project/tests:
+fixtures  ngauto  smoke.spec.js  smoke.spec.ts  test.d.ts
+
+/workspace/project/tests/fixtures:
+
+/workspace/project/tests/ngauto:
+add-to-cart.spec.js                       invalidPassword.spec.js   locked-out.spec.js       product-sorting.spec.js           td-001-valid-login.spec.js       td-004-empty-credentials.spec.js  valid-login.spec.js
+add-to-cart.spec.ts                       invalidPassword.spec.ts   locked-out.spec.ts       product-sorting.spec.ts           td-001-valid-login.spec.ts       td-004-empty-credentials.spec.ts  valid-login.spec.ts
+checkout-with-missing-first-name.spec.js  invalid_password.spec.js  lockedOutUser.spec.js    remove-product-from-cart.spec.js  td-002-invalid-password.spec.js  td-005-empty-username.spec.js     validLogin.spec.js
+checkout-with-missing-first-name.spec.ts  invalid_password.spec.ts  lockedOutUser.spec.ts    remove-product-from-cart.spec.ts  td-002-invalid-password.spec.ts  td-005-empty-username.spec.ts     validLogin.spec.ts
+invalid-password.spec.js                  locked-out-user.spec.js   locked_out_user.spec.js  successful-checkout.spec.js       td-003-locked-out-user.spec.js   td-006-empty-password.spec.js     valid_login.spec.js
+invalid-password.spec.ts                  locked-out-user.spec.ts   locked_out_user.spec.ts  successful-checkout.spec.ts       td-003-locked-out-user.spec.ts   td-006-empty-password.spec.ts     valid_login.spec.ts
+[The command completed with exit code 0.]
+[Current working directory: /workspace/project]
+[Python interpreter: /usr/local/bin/python]
+[Command finished with exit code 0]

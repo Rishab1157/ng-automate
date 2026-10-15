@@ -77,7 +77,7 @@ FIND OUT:
 - architecture_pattern: how the test code is organized (e.g. Page Object Model, BDD with step definitions, keyword-driven, data-driven).
 - test_command: the exact command that runs the tests (look at build files, README, CI files).
 - reporting_tools: the reporting tools or libraries (e.g. Allure, ExtentReports, Cucumber reports).
-- important_paths: the key folders and files and their role (page objects, step definitions, test data, config, base classes, utilities, CI).
+- important_paths: the key folders and files and their role (page objects, fixtures, hooks, custom commands, keyword resources, step definitions, base classes, helpers, test data, config, CI).
 - open_questions: what you could not decide.
 
 HOW TO WORK:

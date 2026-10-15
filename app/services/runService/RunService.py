@@ -109,11 +109,13 @@ class RunService:
         test_selector: str | None = None,
         test_files: list[str] | None = None,
         test_data_id: str | None = None,
+        instructions: str | None = None,
     ) -> RunModel:
         """Insert a queued run. The caller starts it (the run executor).
 
         A test or generate run reuses the project's latest profile when it has one (a project's files never change),
-        so it goes straight to its work instead of analyzing the project again.
+        so it goes straight to its work instead of analyzing the project again. `instructions`: the user's own words
+        for the run's agents (the generator and the healer follow them); an analysis run has no such agent.
         """
         project = await self.project_service.get(project_id, org_id)
         connection_id = connection_id_or_none(model_connection_id)
@@ -152,6 +154,7 @@ class RunService:
             test_selector=selector,
             test_files=files,
             test_data_id=test_data_id,
+            instructions=_run_instructions(mode, instructions),
             outputs=outputs,
         )
         await self.run_repo.insert_one(db_model.model_dump(by_alias=True))
@@ -367,6 +370,13 @@ class RunService:
         await self.run_repo.update_one(
             {"_id": ObjectId(run_id)}, {"$set": {**fields, "updated_at": now or datetime.now(UTC)}}
         )
+
+
+def _run_instructions(mode: RunMode, instructions: str | None) -> str | None:
+    """The user's instructions as stored: only for runs with an agent that follows them (not an analysis run)."""
+    if mode == RunMode.ANALYZE:
+        return None
+    return (instructions or "").strip() or None
 
 
 def _enum_value(value: Any) -> str:

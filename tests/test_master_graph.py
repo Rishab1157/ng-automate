@@ -357,6 +357,7 @@ def test_initial_state_holds_the_ids_and_every_saved_output() -> None:
         "test_selector": None,
         "test_files": None,
         "test_data_id": None,
+        "instructions": None,
         "project_dir": "/data/runs/x/project",
         "fact_sheet": EMPTY_FACT_SHEET.model_dump(mode="json"),
     }

@@ -1,0 +1,672 @@
+added 66 packages, and audited 67 packages in 1m
+
+5 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/add-to-cart.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/add-to-cart.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('Add to Cart', () => {
+  5 |     (0, test_1.test)('Add Sauce Labs Backpack to cart and verify the cart badge', async ({ page, loginPage }) => {
+  6 |         await loginPage.open();
+    at Object.<anonymous> (/workspace/project/tests/ngauto/add-to-cart.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test.ts'
+Require stack:
+- /workspace/project/tests/ngauto/add-to-cart.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/add-to-cart.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test.ts';
+    | ^
+  2 | import { LoginPage } from '../pages/LoginPage';
+  3 |
+  4 | test.describe('Add to Cart', () => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/add-to-cart.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/checkout-with-missing-first-name.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/checkout-with-missing-first-name.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('Checkout with missing first name', () => {
+  5 |     (0, test_1.test)('checkout form refuses to continue without a first name', async ({ page, loginPage, productsPage, checkoutPage }) => {
+  6 |         await loginPage.open();
+    at Object.<anonymous> (/workspace/project/tests/ngauto/checkout-with-missing-first-name.spec.js:3:16)
+
+SyntaxError: /workspace/project/tests/ngauto/checkout-with-missing-first-name.spec.ts: Identifier 'CheckoutPage' has already been declared. (5:9)
+
+  3 | import { ProductsPage } from '../pages/ProductsPage';
+  4 | import { CheckoutPage } from '../pages/CheckoutPage';
+> 5 | import { CheckoutPage } from '../pages/CheckoutPage';
+    |          ^
+  6 |
+  7 | test.describe('Checkout with missing first name', () => {
+  8 |   test('checkout form refuses to continue without a first name', async ({ page, loginPage, productsPage, checkoutPage }) => {
+
+   at ngauto/checkout-with-missing-first-name.spec.ts:5
+
+  3 | import { ProductsPage } from '../pages/ProductsPage';
+  4 | import { CheckoutPage } from '../pages/CheckoutPage';
+> 5 | import { CheckoutPage } from '../pages/CheckoutPage';
+    |         ^
+  6 |
+  7 | test.describe('Checkout with missing first name', () => {
+  8 |   test('checkout form refuses to continue without a first name', async ({ page, loginPage, productsPage, checkoutPage }) => {
+
+Error: Cannot find module '../fixtures/test.ts'
+Require stack:
+- /workspace/project/tests/ngauto/invalid_password.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/invalid_password.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_ts_1 = require("../fixtures/test.ts");
+    |                   ^
+  4 | test_ts_1.test.describe('Invalid Password', () => {
+  5 |     (0, test_ts_1.test)('TD-002: Invalid password [tags: login]', async ({ page, loginPage }) => {
+  6 |         await loginPage.open('https://www.saucedemo.com/');
+    at Object.<anonymous> (/workspace/project/tests/ngauto/invalid_password.spec.js:3:19)
+
+Error: Cannot find module '../fixtures/test.ts'
+Require stack:
+- /workspace/project/tests/ngauto/invalid_password.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/invalid_password.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test.ts';
+    | ^
+  2 | import { LoginPage } from '../pages/LoginPage';
+  3 |
+  4 | test.describe('Invalid Password', () => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/invalid_password.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/invalid-password.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/invalid-password.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('Invalid Password', () => { (0, test_1.test)('TD-002: Invalid password [tags: login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('standard_user', 'wrong_password'); await (0, test_1.expect)(loginPage.errorMessage).toHaveText('Epic sadface: Username and password do not match any user in this service'); }); });
+  5 |
+    at Object.<anonymous> (/workspace/project/tests/ngauto/invalid-password.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/invalid-password.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/invalid-password.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Invalid Password', () => { test('TD-002: Invalid password [tags: login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('standard_user', 'wrong_password'); await expect(loginPage.errorMessage).toHaveText('Epic sadface: Username and password do not match any user in this service'); }); });
+    | ^
+  2 |
+    at Object.<anonymous> (/workspace/project/tests/ngauto/invalid-password.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/invalidPassword.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/invalidPassword.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('Login', () => {
+  5 |     (0, test_1.test)('invalid password [tags: login]', async ({ page, loginPage }) => {
+  6 |         await loginPage.open();
+    at Object.<anonymous> (/workspace/project/tests/ngauto/invalidPassword.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/invalidPassword.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/invalidPassword.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test';
+    | ^
+  2 | import { LoginPage } from '../pages/LoginPage';
+  3 |
+  4 | test.describe('Login', () => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/invalidPassword.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test.ts'
+Require stack:
+- /workspace/project/tests/ngauto/locked_out_user.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/locked_out_user.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_ts_1 = require("../fixtures/test.ts");
+    |                   ^
+  4 | test_ts_1.test.describe('Locked Out User', () => {
+  5 |     (0, test_ts_1.test)('TD-003: Locked-out user [tags: login]', async ({ page, loginPage }) => {
+  6 |         await loginPage.open('https://www.saucedemo.com/');
+    at Object.<anonymous> (/workspace/project/tests/ngauto/locked_out_user.spec.js:3:19)
+
+Error: Cannot find module '../fixtures/test.ts'
+Require stack:
+- /workspace/project/tests/ngauto/locked_out_user.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/locked_out_user.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test.ts';
+    | ^
+  2 | import { LoginPage } from '../pages/LoginPage';
+  3 |
+  4 | test.describe('Locked Out User', () => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/locked_out_user.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/locked-out-user.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/locked-out-user.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('Locked Out User', () => { (0, test_1.test)('TD-003: Locked-out user [tags: login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('locked_out_user', 'secret_sauce'); await (0, test_1.expect)(loginPage.errorMessage).toHaveText('Epic sadface: Sorry, this user has been locked out.'); }); });
+  5 |
+    at Object.<anonymous> (/workspace/project/tests/ngauto/locked-out-user.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/locked-out-user.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/locked-out-user.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Locked Out User', () => { test('TD-003: Locked-out user [tags: login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('locked_out_user', 'secret_sauce'); await expect(loginPage.errorMessage).toHaveText('Epic sadface: Sorry, this user has been locked out.'); }); });
+    | ^
+  2 |
+    at Object.<anonymous> (/workspace/project/tests/ngauto/locked-out-user.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/locked-out.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/locked-out.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('Locked-out User', () => {
+  5 |     (0, test_1.test)('TD-003: Locked-out user [tags: login]', async ({ page, loginPage }) => {
+  6 |         await loginPage.open();
+    at Object.<anonymous> (/workspace/project/tests/ngauto/locked-out.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/locked-out.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/locked-out.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage';
+    | ^
+  2 |
+  3 | test.describe('Locked-out User', () => {
+  4 |   test('TD-003: Locked-out user [tags: login]', async ({ page, loginPage }) => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/locked-out.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/lockedOutUser.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/lockedOutUser.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('Login', () => {
+  5 |     (0, test_1.test)('locked-out user [tags: login]', async ({ page, loginPage }) => {
+  6 |         await loginPage.open();
+    at Object.<anonymous> (/workspace/project/tests/ngauto/lockedOutUser.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/lockedOutUser.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/lockedOutUser.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test';
+    | ^
+  2 | import { LoginPage } from '../pages/LoginPage';
+  3 |
+  4 | test.describe('Login', () => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/lockedOutUser.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/product-sorting.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/product-sorting.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('Product Sorting', () => {
+  5 |     (0, test_1.test)('Sort products by name (Z to A) and verify the first product', async ({ page, loginPage }) => {
+  6 |         await loginPage.open();
+    at Object.<anonymous> (/workspace/project/tests/ngauto/product-sorting.s<response clipped><NOTE>Due to the max output limit, only part of the full response has been shown to you.</NOTE>
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/successful-checkout.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/successful-checkout.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('Successful checkout', () => {
+  5 |     (0, test_1.test)('full checkout of one product ends with the order confirmation', async ({ page, loginPage, productsPage, checkoutPage }) => {
+  6 |         await loginPage.open();
+    at Object.<anonymous> (/workspace/project/tests/ngauto/successful-checkout.spec.js:3:16)
+
+SyntaxError: /workspace/project/tests/ngauto/successful-checkout.spec.ts: Identifier 'CheckoutPage' has already been declared. (5:9)
+
+  3 | import { ProductsPage } from '../pages/ProductsPage';
+  4 | import { CheckoutPage } from '../pages/CheckoutPage';
+> 5 | import { CheckoutPage } from '../pages/CheckoutPage';
+    |          ^
+  6 |
+  7 | test.describe('Successful checkout', () => {
+  8 |   test('full checkout of one product ends with the order confirmation', async ({ page, loginPage, productsPage, checkoutPage }) => {
+
+   at ngauto/successful-checkout.spec.ts:5
+
+  3 | import { ProductsPage } from '../pages/ProductsPage';
+  4 | import { CheckoutPage } from '../pages/CheckoutPage';
+> 5 | import { CheckoutPage } from '../pages/CheckoutPage';
+    |         ^
+  6 |
+  7 | test.describe('Successful checkout', () => {
+  8 |   test('full checkout of one product ends with the order confirmation', async ({ page, loginPage, productsPage, checkoutPage }) => {
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/td-001-valid-login.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/td-001-valid-login.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('TD-001: Valid login', () => {
+  5 |     (0, test_1.test)('A valid user logs in and lands on the products page', async ({ page, loginPage }) => {
+  6 |         await loginPage.open('https://www.saucedemo.com/');
+    at Object.<anonymous> (/workspace/project/tests/ngauto/td-001-valid-login.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/td-001-valid-login.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/td-001-valid-login.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test';
+    | ^
+  2 | import { LoginPage } from '../pages/LoginPage';
+  3 |
+  4 | test.describe('TD-001: Valid login', () => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/td-001-valid-login.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/td-002-invalid-password.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/td-002-invalid-password.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('TD-002: Invalid password', () => {
+  5 |     (0, test_1.test)('A wrong password is refused with an error message', async ({ page, loginPage }) => {
+  6 |         await loginPage.open('https://www.saucedemo.com/');
+    at Object.<anonymous> (/workspace/project/tests/ngauto/td-002-invalid-password.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/td-002-invalid-password.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/td-002-invalid-password.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test';
+    | ^
+  2 | import { LoginPage } from '../pages/LoginPage';
+  3 |
+  4 | test.describe('TD-002: Invalid password', () => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/td-002-invalid-password.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/td-003-locked-out-user.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/td-003-locked-out-user.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('TD-003: Locked-out user', () => {
+  5 |     (0, test_1.test)('A locked-out user cannot log in', async ({ page, loginPage }) => {
+  6 |         await loginPage.open('https://www.saucedemo.com/');
+    at Object.<anonymous> (/workspace/project/tests/ngauto/td-003-locked-out-user.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/td-003-locked-out-user.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/td-003-locked-out-user.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test';
+    | ^
+  2 | import { LoginPage } from '../pages/LoginPage';
+  3 |
+  4 | test.describe('TD-003: Locked-out user', () => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/td-003-locked-out-user.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/td-004-empty-credentials.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/td-004-empty-credentials.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | (0, test_1.test)('TD-004: Empty credentials', async ({ page, loginPage }) => {
+  5 |     await loginPage.open();
+  6 |     await loginPage.loginButton.click();
+    at Object.<anonymous> (/workspace/project/tests/ngauto/td-004-empty-credentials.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/td-004-empty-credentials.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/td-004-empty-credentials.spec.ts:1
+
+> 1 | import { test, expect } from '../fixtures/test';
+    | ^
+  2 | import { LoginPage } from '../pages/LoginPage';
+  3 |
+  4 | test('TD-004: Empty credentials', async ({ page, loginPage }) => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/td-004-empty-credentials.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/td-005-empty-username.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/td-005-empty-username.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | (0, test_1.test)('TD-005: Empty username', async ({ page, loginPage }) => {
+  5 |     await loginPage.open();
+  6 |     await loginPage.typePassword('secret_sauce');
+    at Object.<anonymous> (/workspace/project/tests/ngauto/td-005-empty-username.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/td-005-empty-username.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/td-005-empty-username.spec.ts:1
+
+> 1 | import { test, expect } from '../fixtures/test';
+    | ^
+  2 | import { LoginPage } from '../pages/LoginPage';
+  3 |
+  4 | test('TD-005: Empty username', async ({ page, loginPage }) => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/td-005-empty-username.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/td-006-empty-password.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/td-006-empty-password.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | (0, test_1.test)('TD-006: Empty password', async ({ page, loginPage }) => {
+  5 |     await loginPage.open();
+  6 |     await loginPage.typeUsername('standard_user');
+    at Object.<anonymous> (/workspace/project/tests/ngauto/td-006-empty-password.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/td-006-empty-password.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/td-006-empty-password.spec.ts:1
+
+> 1 | import { test, expect } from '../fixtures/test';
+    | ^
+  2 | import { LoginPage } from '../pages/LoginPage';
+  3 |
+  4 | test('TD-006: Empty password', async ({ page, loginPage }) => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/td-006-empty-password.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test.ts'
+Require stack:
+- /workspace/project/tests/ngauto/valid_login.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/valid_login.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_ts_1 = require("../fixtures/test.ts");
+    |                   ^
+  4 | test_ts_1.test.describe('Valid Login', () => {
+  5 |     (0, test_ts_1.test)('TD-001: Valid login [tags: smoke, login]', async ({ page, loginPage }) => {
+  6 |         await loginPage.open('https://www.saucedemo.com/');
+    at Object.<anonymous> (/workspace/project/tests/ngauto/valid_login.spec.js:3:19)
+
+Error: Cannot find module '../fixtures/test.ts'
+Require stack:
+- /workspace/project/tests/ngauto/valid_login.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/valid_login.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test.ts';
+    | ^
+  2 | import { LoginPage } from '../pages/LoginPage';
+  3 |
+  4 | test.describe('Valid Login', () => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/valid_login.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/valid-login.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/valid-login.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('Valid Login', () => { (0, test_1.test)('TD-001: Valid login [tags: smoke, login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('standard_user', 'secret_sauce'); await (0, test_1.expect)(page).toHaveTitle('Products'); }); });
+  5 |
+    at Object.<anonymous> (/workspace/project/tests/ngauto/valid-login.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/valid-login.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/valid-login.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test'; import { LoginPage } from '../pages/LoginPage'; test.describe('Valid Login', () => { test('TD-001: Valid login [tags: smoke, login]', async ({ page, loginPage }) => { await loginPage.open(); await loginPage.loginAs('standard_user', 'secret_sauce'); await expect(page).toHaveTitle('Products'); }); });
+    | ^
+  2 |
+    at Object.<anonymous> (/workspace/project/tests/ngauto/valid-login.spec.ts:1:1)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/validLogin.spec.js
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/validLogin.spec.js:3
+
+  1 | "use strict";
+  2 | Object.defineProperty(exports, "__esModule", { value: true });
+> 3 | const test_1 = require("../fixtures/test");
+    |                ^
+  4 | test_1.test.describe('Login', () => {
+  5 |     (0, test_1.test)('valid login [tags: smoke, login]', async ({ page, loginPage }) => {
+  6 |         await loginPage.open();
+    at Object.<anonymous> (/workspace/project/tests/ngauto/validLogin.spec.js:3:16)
+
+Error: Cannot find module '../fixtures/test'
+Require stack:
+- /workspace/project/tests/ngauto/validLogin.spec.ts
+- /workspace/project/node_modules/playwright/lib/common/index.js
+- /workspace/project/node_modules/playwright/lib/program.js
+- /workspace/project/node_modules/@playwright/test/cli.js
+
+   at ngauto/validLogin.spec.ts:1
+
+> 1 | import { expect, test } from '../fixtures/test';
+    | ^
+  2 | import { LoginPage } from '../pages/LoginPage';
+  3 |
+  4 | test.describe('Login', () => {
+    at Object.<anonymous> (/workspace/project/tests/ngauto/validLogin.spec.ts:1:1)
+[The command completed with exit code 1.]
+[Current working directory: /workspace/project]
+[Python interpreter: /usr/local/bin/python]
+[Command finished with exit code 1]

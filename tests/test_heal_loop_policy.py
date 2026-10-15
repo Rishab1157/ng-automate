@@ -179,6 +179,18 @@ def test_the_same_failure_with_more_tests_passing_is_progress_not_a_streak() -> 
     assert stop_reason(attempts, SAME_FAILURE_LIMIT) is None
 
 
+@pytest.mark.parametrize("broken_file", [
+    "[ERROR] Malformed POM /workspace/project/pom.xml: Unrecognised tag: 'dependency'",
+    "Error: Failed to load tsconfig file at /workspace/project/tsconfig.json:",
+])
+def test_a_build_file_that_loads_again_is_better_though_the_code_does_not_compile_yet(broken_file: str) -> None:
+    # The build tool cannot read a broken build file at all: code that does not compile can be fixed one file at a time.
+    broken, not_compiling = _build(broken_file), _build(TEST_ERROR)
+
+    assert got_better(broken, not_compiling) and not got_worse(broken, not_compiling)
+    assert got_worse(not_compiling, broken)
+
+
 def test_a_build_that_only_gained_errors_is_worse() -> None:
     assert got_worse(_build(TEST_ERROR), _build(TEST_ERROR, BASE_ERROR))
     # Other errors instead of the old ones: neither better nor worse.

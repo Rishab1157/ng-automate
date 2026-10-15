@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from pydantic import field_validator
 
 from app.dto.common import object_id_validator
-from app.models.runModel import RunMode
+from app.models.runModel import MAX_RUN_INSTRUCTIONS_CHARS, RunMode
 
 
 class CreateRunDTO(BaseModel):
@@ -32,6 +32,14 @@ class CreateRunDTO(BaseModel):
     test_data_id: str | None = Field(
         None, description="Generate mode only: the test data to write tests from (POST /project/{id}/test-data)."
     )
+    instructions: str | None = Field(
+        None,
+        max_length=MAX_RUN_INSTRUCTIONS_CHARS,
+        description="Generate and test modes: what the user wants from the agents of this run, in their own words, "
+        "e.g. 'write the new tests as BDD feature files' or 'reuse the existing login steps'. The test generator and "
+        "the healer follow it, and it wins over their default rules (existing tests are never deleted or weakened). "
+        "Leave empty for none.",
+    )
 
     _validate_project_id = object_id_validator("project_id")
 
@@ -41,3 +49,10 @@ class CreateRunDTO(BaseModel):
         if value is not None and not ObjectId.is_valid(value):
             raise ValueError("test_data_id is not a valid id")
         return value
+
+    @field_validator("instructions")
+    @classmethod
+    def _strip_instructions(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None

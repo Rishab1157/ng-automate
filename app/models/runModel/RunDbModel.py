@@ -19,6 +19,7 @@ class RunCreateDbModel(BaseModel):
     test_selector: str | None = None
     test_files: list[str] | None = None
     test_data_id: ObjectId | None = None
+    instructions: str | None = None
     status: str
     stage: str
     # Same shape as RunOutputsModel; profile_id is stored as an ObjectId once set.

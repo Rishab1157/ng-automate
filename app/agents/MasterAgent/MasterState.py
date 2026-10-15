@@ -18,6 +18,8 @@ class MasterState(TypedDict, total=False):
     test_selector: str | None
     test_files: list[str] | None
     test_data_id: str | None
+    # The user's own instructions for the run's agents (generator, healer).
+    instructions: str | None
     # Host folder with this run's copy of the project. Internal: never sent to the API, the events or the LLM.
     project_dir: str
     # FactSheetModel and AnalyzerFindingsModel as JSON dicts, the same shape the run document stores.
@@ -50,6 +52,7 @@ def initial_state(run: RunModel) -> MasterState:
         test_selector=run.test_selector,
         test_files=run.test_files,
         test_data_id=run.test_data_id,
+        instructions=run.instructions,
     )
     saved = run.outputs.model_dump(mode="json")
     state.update({key: value for key, value in saved.items() if value is not None})  # type: ignore[typeddict-item]

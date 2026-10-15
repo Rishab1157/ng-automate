@@ -109,9 +109,9 @@ class FakeHealer:
 
     def heal(self, workspace: Any, project_dir: Path, result: TestRunResultModel, command: TestCommandModel,
              fact_sheet: FactSheetModel, on_event: Any = None, previous: Any = (), control: Any = None,
-             time_limit: float | None = None, memories: Any = ()) -> HealOutcomeModel:
+             time_limit: float | None = None, memories: Any = (), instructions: str | None = None) -> HealOutcomeModel:
         self.calls.append({"workspace": workspace, "result": result, "previous": list(previous),
-                           "time_limit": time_limit, "memories": list(memories)})
+                           "time_limit": time_limit, "memories": list(memories), "instructions": instructions})
         on_event(AgentEvent(RunEventType.AGENT_ACTION, RunEventLevel.INFO, "str_replace pom.xml", {"tool": "file_editor"}))
         for path, text in (self.edits.pop(0) if self.edits else {}).items():
             (project_dir / path).parent.mkdir(parents=True, exist_ok=True)
@@ -477,8 +477,10 @@ class FakeGenerator:
         return self
 
     def generate(self, workspace: Any, project_dir: Path, data_set: TestDataSetModel, fact_sheet: FactSheetModel,
-                 findings: Any, command: TestCommandModel, on_event: Any = None, control: Any = None) -> GenerationOutcomeModel:
-        self.calls.append({"workspace": workspace, "data_set": data_set, "findings": findings, "command": command})
+                 findings: Any, command: TestCommandModel, on_event: Any = None, control: Any = None,
+                 instructions: str | None = None) -> GenerationOutcomeModel:
+        self.calls.append({"workspace": workspace, "data_set": data_set, "findings": findings, "command": command,
+                           "instructions": instructions})
         on_event(AgentEvent(RunEventType.AGENT_ACTION, RunEventLevel.INFO, "create login.feature", {"tool": "file_editor"}))
         return self.outcome
 
@@ -647,3 +649,23 @@ async def test_no_memories_no_event(tmp_path: Path) -> None:
 
     assert setup.healer.calls[0]["memories"] == []
     assert not any(e.message.startswith("The healer got") for e in setup.runs.events)
+
+
+@pytest.mark.anyio
+async def test_the_users_instructions_reach_the_healer(tmp_path: Path) -> None:
+    setup = _setup(tmp_path, [DEPENDENCY, PASSED], [FIX])
+
+    await setup.nodes.test_and_heal(_test_state(tmp_path, instructions="reuse the existing login steps"))
+
+    [call] = setup.healer.calls
+    assert call["instructions"] == "reuse the existing login steps"
+
+
+@pytest.mark.anyio
+async def test_the_users_instructions_reach_the_generator(tmp_path: Path) -> None:
+    setup, generator, _ = _generate_setup(tmp_path)
+
+    await setup.nodes.generate_tests(_generate_state(tmp_path, instructions="write the new tests as BDD feature files"))
+
+    [call] = generator.calls
+    assert call["instructions"] == "write the new tests as BDD feature files"

@@ -1,0 +1,93 @@
+<testsuites id="" name="" tests="4" failures="1" skipped="0" errors="2" time="9.864545">
+<testsuite name="demo.spec.ts" timestamp="2026-10-15T07:26:32.447Z" hostname="chromium" tests="4" failures="1" skipped="0" time="4.256" errors="2">
+<testcase name="passes" classname="demo.spec.ts" time="0.078">
+</testcase>
+<testcase name="clicks a missing element" classname="demo.spec.ts" time="2.045">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|../test-results/demo-clicks-a-missing-element-chromium/error-context.md]]
+]]>
+</system-out>
+<error message="locator.click: Timeout 2000ms exceeded." type="TimeoutError">
+<![CDATA[  [chromium] › demo.spec.ts:8:5 › clicks a missing element ─────────────────────────────────────────
+
+    TimeoutError: locator.click: Timeout 2000ms exceeded.
+    Call log:
+      - waiting for locator('#missing-button')
+
+
+       8 | test('clicks a missing element', async ({ page }) => {
+       9 |   await page.setContent('<button id="save">Save</button>');
+    > 10 |   await page.locator('#missing-button').click({ timeout: 2000 });
+         |                                         ^
+      11 | });
+      12 |
+      13 | test.describe('checkout', () => {
+        at /workspace/project/tests/demo.spec.ts:10:41
+
+    Error Context: ../test-results/demo-clicks-a-missing-element-chromium/error-context.md
+]]>
+</error>
+</testcase>
+<testcase name="checkout › calls a method that does not exist" classname="demo.spec.ts" time="0.063">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|../test-results/demo-checkout-calls-a-method-that-does-not-exist-chromium/error-context.md]]
+]]>
+</system-out>
+<error message="page.typeInto is not a function" type="TypeError">
+<![CDATA[  [chromium] › demo.spec.ts:14:7 › checkout › calls a method that does not exist ───────────────────
+
+    TypeError: page.typeInto is not a function
+
+      14 |   test('calls a method that does not exist', async ({ page }) => {
+      15 |     await page.setContent('<input id="first-name">');
+    > 16 |     await (page as any).typeInto('#first-name', 'Ada');
+         |                         ^
+      17 |   });
+      18 |
+      19 |   test('checks the wrong text', async ({ page }) => {
+        at /workspace/project/tests/demo.spec.ts:16:25
+
+    Error Context: ../test-results/demo-checkout-calls-a-method-that-does-not-exist-chromium/error-context.md
+]]>
+</error>
+</testcase>
+<testcase name="checkout › checks the wrong text" classname="demo.spec.ts" time="2.07">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|../test-results/demo-checkout-checks-the-wrong-text-chromium/error-context.md]]
+]]>
+</system-out>
+<failure message="expect(locator).toHaveText(expected) failed" type="expect.toHaveText">
+<![CDATA[  [chromium] › demo.spec.ts:19:7 › checkout › checks the wrong text ────────────────────────────────
+
+    Error: expect(locator).toHaveText(expected) failed
+
+    Locator:  locator('#title')
+    Expected: "wrong"
+    Received: "Products"
+    Timeout:  2000ms
+
+    Call log:
+      - Expect "toHaveText" locator('#title') with timeout 2000ms
+      - waiting for locator('#title')
+        21 × locator resolved to <h1 id="title">Products</h1>
+           - unexpected value "Products"
+
+
+      19 |   test('checks the wrong text', async ({ page }) => {
+      20 |     await page.setContent('<h1 id="title">Products</h1>');
+    > 21 |     await expect(page.locator('#title')).toHaveText('wrong', { timeout: 2000 });
+         |                                          ^
+      22 |   });
+      23 | });
+      24 |
+        at /workspace/project/tests/demo.spec.ts:21:42
+
+    Error Context: ../test-results/demo-checkout-checks-the-wrong-text-chromium/error-context.md
+]]>
+</failure>
+</testcase>
+</testsuite>
+</testsuites>

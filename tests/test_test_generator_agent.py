@@ -129,7 +129,7 @@ def test_generated_feature_is_kept_as_written(conversation: Callable[..., list[F
     assert "NGAUTO-UNVERIFIED" in prompt and "Never leave a case out" in prompt
     assert "Preconditions" in prompt
     assert "src/test/java/com/demo/pages: page objects" in prompt
-    assert "The project's own tests and helpers" in prompt
+    assert "A sample of the project's own tests and shared code" in prompt
     assert "class LoginSteps" in prompt  # the project's own helper is inlined, so the model can reuse its API
     assert "new .feature file" in prompt  # where the scenarios go (a Cucumber project)
     assert {tool.name for tool in fake.agent.tools} == set(GENERATOR_TOOL_NAMES)
@@ -296,9 +296,11 @@ def test_cases_go_to_the_agent_a_few_at_a_time_in_one_conversation(
     assert "CASE-1" in first and "CASE-2" in first and "CASE-3" not in first
     assert "(These are cases 1-2 of 5; the next ones follow once these are written.)" in first
     assert "next test cases (3-4 of 5)" in second and "CASE-3" in second and "CASE-4" in second
-    assert "CASE-2" not in second and "Rules:" not in second
+    assert "Case CASE-2:" not in second and "How to work" not in second
     # A small model breaks files it edits (str_replace): every later batch goes into new files instead.
-    assert "NEW test files" in second and "Do not edit the test files you already wrote" in second
+    assert "NEW test files" in second and "do not edit the test files you already wrote" in " ".join(second.split())
+    # Where the work stands comes from the files, not from the model's memory (the condenser may drop it).
+    assert "Where the work stands" in second and "src/test/resources/features/ngauto/part1.feature" in second
     assert "next test cases (5-5 of 5)" in third and "CASE-5" in third
     assert [e.message for e in events if e.type == RunEventType.AGENT_MESSAGE and "Writing tests" in e.message] == [
         "Writing tests for cases 1-2 of 5", "Writing tests for cases 3-4 of 5", "Writing tests for cases 5-5 of 5",
@@ -428,7 +430,9 @@ def test_build_errors_go_back_to_the_generator_until_the_tests_build(
     [fake] = created
     assert len(fake.messages) == 2
     fix = fake.messages[1]
-    assert "does not build with the tests you wrote" in fix and "cannot find symbol" in fix and "class LoginPage" in fix
+    assert "The check `mvn -B -ntp -q -DskipTests test-compile` fails with the files you wrote" in fix
+    assert "cannot find symbol" in fix and "class LoginPage" in fix
+    assert "Where the work stands" in fix and FEATURE in fix
     assert "[INFO] Compiling" not in fix  # only the lines that name the errors
     assert outcome.builds is True
     notices = [e.message for e in events if e.type in (RunEventType.AGENT_ERROR, RunEventType.AGENT_MESSAGE)]
@@ -465,3 +469,66 @@ def test_tests_that_never_build_are_left_to_the_healer(
     assert outcome.builds is False
     assert any("still do not build after 2 fixes" in e.message for e in events)
     assert [f.path for f in outcome.files] == [FEATURE]  # what it wrote is kept for the healer
+
+
+NODE_MODULE_ERROR = (
+    "Error: Cannot find module '../fixtures/test'\n"
+    "Require stack:\n"
+    "- /workspace/project/tests/ngauto/td-001-valid-login.spec.ts\n"
+    "- /workspace/project/node_modules/playwright/lib/transform/transform.js\n"
+)
+
+
+def test_a_build_error_keeps_the_lines_that_name_its_file(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
+    # A real Playwright check: the file with the wrong import is in the require stack, after the error line.
+    project = _project(tmp_path)
+    workspace = BuildWorkspace(project, [(0, ""), (1, NODE_MODULE_ERROR), (0, "")])
+    created = conversation(edit=_writes_feature(project))
+
+    _generate_checked(project, workspace, [])
+
+    fix = created[0].messages[1]
+    assert "Cannot find module '../fixtures/test'" in fix
+    assert "/workspace/project/tests/ngauto/td-001-valid-login.spec.ts" in fix
+
+
+def test_a_case_written_twice_is_reported_and_the_next_batch_is_told_to_keep_one(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
+    project = _project(tmp_path)
+    turns: list[int] = []
+
+    def write_case_one_again() -> None:
+        # The same case under another name in every turn, as a small model did after a condensation.
+        turns.append(1)
+        path = project / f"src/test/resources/features/ngauto/case_1_v{len(turns)}.feature"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("Feature: CASE-1 Case 1\n", encoding="utf-8")
+
+    created = conversation(edit=write_case_one_again, answer="Wrote a feature.")
+    events: list[AgentEvent] = []
+
+    _batched(project, _cases(5), events)
+
+    third = created[0].messages[2]
+    assert "CASE-1 is in 2 of your files" in third and "keep the best file" in third
+    notices = [e.message for e in events if e.type == RunEventType.AGENT_ERROR]
+    assert any(notice.startswith("Some test cases are in more than one generated file (CASE-1)") for notice in notices)
+
+
+def test_the_users_instructions_come_before_the_rules_in_every_batch(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
+    project = _project(tmp_path)
+    created = conversation(edit=_writes_feature(project), answer="Wrote a feature.")
+    agent = TestGeneratorAgent(LlmConfigModel(model="openai/gpt-4o"), max_iterations=5, batch_size=2)
+
+    agent.generate(LocalWorkspace(working_dir=str(project)), project, _cases(3), FACT_SHEET, FINDINGS, COMMAND,
+                   instructions="Write the new tests as BDD feature files.")
+
+    first, second = created[0].messages[:2]  # then nudges: this fake writes the same file every turn
+    assert "The user's instructions for this run (they come first" in first
+    assert first.index("Write the new tests as BDD feature files.") < first.index("How to work")
+    assert "- Write the new tests as BDD feature files." in second

@@ -23,6 +23,8 @@ class RunResponseDTO(BaseModel):
     test_selector: str | None = None
     test_files: list[str] | None = None
     test_data_id: str | None = None
+    # The user's own instructions for the run's agents, as given when the run was created.
+    instructions: str | None = None
     status: RunStatus
     stage: RunStage
     error: RunErrorDTO | None = None
@@ -48,6 +50,7 @@ class RunResponseDTO(BaseModel):
             test_selector=run.test_selector,
             test_files=run.test_files,
             test_data_id=run.test_data_id,
+            instructions=run.instructions,
             status=run.status,
             stage=run.stage,
             error=RunErrorDTO(code=run.error.code, message=run.error.message) if run.error else None,

@@ -19,7 +19,7 @@ from tests.test_run_service import seed_model_connection, seed_profile, seed_pro
 BASE = "/tx-agents/ng-automate/run"
 PROJECT_BASE = "/tx-agents/ng-automate/project"
 RUN_FIELDS = {
-    "id", "org_id", "project_id", "created_by", "model_connection_id", "mode", "test_selector", "test_files", "test_data_id", "status", "stage", "error", "profile_id",
+    "id", "org_id", "project_id", "created_by", "model_connection_id", "mode", "test_selector", "test_files", "test_data_id", "instructions", "status", "stage", "error", "profile_id",
     "generation", "test_report",
     "created_at", "updated_at", "started_at", "finished_at",
 }

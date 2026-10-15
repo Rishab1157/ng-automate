@@ -33,8 +33,13 @@ from app.agents.TestGeneratorAgent.GeneratedTestPlacement import (
     runnable_cases,
     unverified_locators,
 )
+from app.agents.TestGeneratorAgent.GenerationState import collect_state, describe_state
 from app.agents.TestGeneratorAgent.ProjectTestBriefing import project_test_briefing
-from app.agents.TestGeneratorAgent.TestGeneratorPrompts import build_generate_prompt, build_next_batch_prompt
+from app.agents.TestGeneratorAgent.TestGeneratorPrompts import (
+    build_fix_prompt,
+    build_generate_prompt,
+    build_next_batch_prompt,
+)
 from app.config import settings
 from app.core.exceptions import ErrorMessages, GenerationError, ValidationError
 from app.models.analyzerModel import AnalyzerFindingsModel, FactSheetModel
@@ -76,17 +81,12 @@ STILL_BROKEN_NOTICE = "The tests still do not build after {total} fixes: the tes
 NOT_CHECKED_NOTICE = (
     "The project does not build before any test is added, so the generated tests cannot be checked by building them"
 )
-FIX_MESSAGE = """The project does not build with the tests you wrote. Fix these errors, then reply with a short summary:
-```
-{errors}
-```
-Usual causes: a missing import; a method, field or constructor that does not exist (use what the base class, page
-objects and helpers really have: view them; or add the missing member to the project's class, keeping it working for
-the existing tests); a wrong type; or text that is not code, such as the line numbers that `view` shows, copied into a
-file. A file of yours that is badly broken is easiest to rewrite: `rm` it in the terminal, then `create` it again with
-its whole corrected content."""
+DUPLICATES_NOTICE = "Some test cases are in more than one generated file ({cases}): the generator is asked to keep one"
 MAX_BUILD_ERROR_LINES = 40
 MAX_BUILD_ERROR_CHARS = 4000
+# Lines kept after each line that names an error: the file and line, or the cause, usually follow it (a Node "Cannot
+# find module" names the importing file in its require stack; javac names the symbol and its location).
+ERROR_CONTEXT_LINES = 2
 NOT_REACHED = "the test generator stopped before it finished this case"
 GIT_DIR = ".git"
 # One install or build of the tests (a first Maven build downloads the project's dependencies).
@@ -122,8 +122,10 @@ class TestGeneratorAgent:
         command: TestCommandModel,
         on_event: Callable[[AgentEvent], None] | None = None,
         control: AgentControl | None = None,
+        instructions: str | None = None,
     ) -> GenerationOutcomeModel:
-        """Blocking: call from a worker thread. `project_dir` is the host copy mounted in the sandbox.
+        """Blocking: call from a worker thread. `project_dir` is the host copy mounted in the sandbox. `instructions`:
+        the user's own words for this run (given when it was created); they come before the default rules.
 
         Raises ValidationError when no case can be generated. Never raises GenerationError: when the agent stops
         early, the outcome says why in `error` (what it wrote so far is still checked and kept).
@@ -138,7 +140,9 @@ class TestGeneratorAgent:
 
         snapshot = ProjectSnapshot.capture(project_dir)
         had_git_dir = (snapshot.root / GIT_DIR).exists()
-        briefing = project_test_briefing(snapshot.root, fact_sheet.test_dirs, GENERATED_DIR)
+        # The analyzer's important paths point at the shared code (page objects, fixtures, steps) wherever it lives.
+        shared_paths = [item.path for item in findings.important_paths] if findings else []
+        briefing = project_test_briefing(snapshot.root, fact_sheet.test_dirs, GENERATED_DIR, shared_paths)
         forwarder = EventForwarder(on_event, secret_values(self.llm_config))
         conversation = Conversation(
             agent=self._build_agent(),
@@ -154,6 +158,26 @@ class TestGeneratorAgent:
         answers: list[str] = []
         done = 0  # cases whose batch the agent finished
         builds: bool | None = None
+        given = [instructions] if instructions else []
+        # The last check's result, for the state the next messages show: (passed, errors), or None before any check.
+        last_check: list[tuple[bool, str | None]] = []
+
+        def state(cases_done: int) -> str:
+            """Where the work stands, from the project's files (the condenser may have dropped the agent's memory)."""
+            passed, errors = last_check[-1] if last_check else (None, None)
+            current = collect_state(
+                snapshot.root, snapshot.changes(), [case.id for case in cases], [case.id for case in cases[:cases_done]],
+                command.check, passed, errors,
+            )
+            if current.duplicates:
+                forwarder.notify(AgentEvent(
+                    RunEventType.AGENT_ERROR,
+                    RunEventLevel.INFO,
+                    clip(DUPLICATES_NOTICE.format(cases=", ".join(current.duplicates)), MAX_MESSAGE_CHARS),
+                    {"duplicates": current.duplicates},
+                ))
+            return describe_state(current)
+
         try:
             # Only a project that builds before anything is added can show whether the generated tests build.
             checked = self.fix_rounds > 0 and _builds_before(workspace, command, forwarder)
@@ -169,16 +193,23 @@ class TestGeneratorAgent:
                     ))
                 prompt = (
                     build_generate_prompt(
-                        batch, fact_sheet, findings, command, placement_rule(fact_sheet), len(cases), briefing
+                        batch, fact_sheet, findings, command, placement_rule(fact_sheet), len(cases), briefing, given
                     )
                     if done == 0
                     else build_next_batch_prompt(
-                        batch, done + 1, len(cases), control.instructions if control is not None else ()
+                        batch,
+                        done + 1,
+                        len(cases),
+                        [*given, *(control.instructions if control is not None else ())],
+                        state(done),
                     )
                 )
                 answers.append(self._write_batch(conversation, prompt, snapshot.root, forwarder, control))
                 if checked:
-                    builds = self._fix_build(conversation, workspace, command, forwarder, control)
+                    builds = self._fix_build(
+                        conversation, workspace, command, forwarder, control, lambda: state(done + len(batch)),
+                        last_check,
+                    )
                 done += len(batch)
         except GenerationError as failure:
             error = failure.message
@@ -243,11 +274,16 @@ class TestGeneratorAgent:
         command: TestCommandModel,
         forwarder: EventForwarder,
         control: AgentControl | None,
+        state: Callable[[], str] = lambda: "",
+        results: list[tuple[bool, str | None]] | None = None,
     ) -> bool:
-        """Build the tests; while they do not build, hand the errors back to the agent. Whether they build at the end."""
+        """Build the tests; while they do not build, hand the errors back to the agent, with where the work stands
+        (`state`). Whether they build at the end; every check's result is appended to `results`."""
+        results = results if results is not None else []
         deadline = time.monotonic() + self.timeout_seconds
         for attempt in range(1, self.fix_rounds + 1):
             errors = _build_errors(workspace, command, forwarder)
+            results.append((errors is None, errors))
             if errors is None:
                 forwarder.notify(AgentEvent(RunEventType.AGENT_MESSAGE, RunEventLevel.INFO, BUILDS_NOTICE))
                 return True
@@ -259,8 +295,12 @@ class TestGeneratorAgent:
                 BUILD_ERRORS_NOTICE.format(attempt=attempt, total=self.fix_rounds),
                 {"errors": errors},
             ))
-            ask(conversation, FIX_MESSAGE.format(errors=errors), deadline, _generation_failed, control, forwarder)
-        if _build_errors(workspace, command, forwarder) is None:
+            assert command.check is not None
+            ask(conversation, build_fix_prompt(errors, command.check, state()), deadline, _generation_failed, control,
+                forwarder)
+        errors = _build_errors(workspace, command, forwarder)
+        results.append((errors is None, errors))
+        if errors is None:
             forwarder.notify(AgentEvent(RunEventType.AGENT_MESSAGE, RunEventLevel.INFO, BUILDS_NOTICE))
             return True
         forwarder.notify(AgentEvent(RunEventType.AGENT_ERROR, RunEventLevel.INFO, STILL_BROKEN_NOTICE.format(total=self.fix_rounds)))
@@ -297,9 +337,25 @@ def _build_errors(workspace: BaseWorkspace, command: TestCommandModel, forwarder
     if result.exit_code == 0 and not result.timeout_occurred:
         return None
     output = f"{result.stdout}\n{result.stderr}".strip()
-    lines = [line for line in output.splitlines() if "error" in line.lower()][:MAX_BUILD_ERROR_LINES]
+    lines = _error_lines(output)
     text = "\n".join(lines) if lines else output[-MAX_BUILD_ERROR_CHARS:]
     return text[:MAX_BUILD_ERROR_CHARS] or "The build failed without printing an error."
+
+
+def _error_lines(output: str) -> list[str]:
+    """Each line that names an error with the few lines after it, in order, without repeats (Maven prints its compile
+    errors twice)."""
+    lines = output.splitlines()
+    picked: list[str] = []
+    seen: set[str] = set()
+    for index, line in enumerate(lines):
+        if "error" not in line.lower():
+            continue
+        for kept in lines[index:index + 1 + ERROR_CONTEXT_LINES]:
+            if kept.strip() and kept not in seen:
+                seen.add(kept)
+                picked.append(kept)
+    return picked[:MAX_BUILD_ERROR_LINES]
 
 
 def _execute(workspace: BaseWorkspace, shell_command: str) -> Any:

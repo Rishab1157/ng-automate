@@ -1,0 +1,70 @@
+[NG Automate] Installing the project's dependencies: npm ci && npx playwright install chromium
+added 66 packages, and audited 67 packages in 43s
+
+5 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+Downloading Chrome for Testing 156.0.8078.4 (playwright chromium v1248) from https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux64/chrome-linux64.zip
+|                                                                                |   0% of 191.1 MiB
+|■■■■■■■■                                                                        |  10% of 191.1 MiB
+|■■■■■■■■■■■■■■■■                                                                |  20% of 191.1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 191.1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 191.1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 191.1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 191.1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 191.1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 191.1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 191.1 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 191.1 MiB
+Chrome for Testing 156.0.8078.4 (playwright chromium v1248) downloaded to /home/openhands/.cache/ms-playwright/chromium-1248
+Downloading FFmpeg (playwright ffmpeg v1013) from https://cdn.playwright.dev/dbazure/download/playwright/builds/ffmpeg/1013/ffmpeg-linux.zip
+|                                                                                |   0% of 2.2 MiB
+|■■■■■■■■                                                                        |  10% of 2.2 MiB
+|■■■■■■■■■■■■■■■■                                                                |  20% of 2.2 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 2.2 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 2.2 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 2.2 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 2.2 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 2.2 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 2.2 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 2.2 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 2.2 MiB
+FFmpeg (playwright ffmpeg v1013) downloaded to /home/openhands/.cache/ms-playwright/ffmpeg-1013
+Downloading Chrome Headless Shell 156.0.8078.4 (playwright chromium-headless-shell v1248) from https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux64/chrome-headless-shell-linux64.zip
+|                                                                                |   0% of 120 MiB
+|■■■■■■■■                                                                        |  10% of 120 MiB
+|■■■■■■■■■■■■■■■■                                                                |  20% of 120 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 120 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 120 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 120 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 120 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 120 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 120 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 120 MiB
+|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 120 MiB
+Chrome Headless Shell 156.0.8078.4 (playwright chromium-headless-shell v1248) downloaded to /home/openhands/.cache/ms-playwright/chromium_headless_shell-1248
+
+Error: Failed to load tsconfig file at /workspace/project/tsconfig.json:
+JSON5: invalid character ']' at 12:1
+    at loadTsConfig (/workspace/project/node_modules/playwright/lib/common/index.js:753:11)
+    at loadAndValidateTsconfigsForFolder (/workspace/project/node_modules/playwright/lib/common/index.js:988:24)
+    at loadAndValidateTsconfigsForFile (/workspace/project/node_modules/playwright/lib/common/index.js:972:10)
+    at transformHook (/workspace/project/node_modules/playwright/lib/common/index.js:1069:15)
+    at load (/workspace/project/node_modules/playwright/lib/common/index.js:854:23)
+    at nextStep (node:internal/modules/customization_hooks:189:26)
+    at loadWithHooks (node:internal/modules/customization_hooks:374:18)
+    at loadSource (node:internal/modules/cjs/loader:1964:22)
+    at Object.<anonymous> (node:internal/modules/cjs/loader:2053:44)
+    at Module.load (node:internal/modules/cjs/loader:1651:32)
+    at Module._load (node:internal/modules/cjs/loader:1443:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.require (node:internal/modules/cjs/loader:1674:12)
+    at require (node:internal/modules/helpers:157:16)
+    at requireOrImport (/workspace/project/node_modules/playwright/lib/common/index.js:1098:18)
+    at loadUserConfig (/workspace/project/node_modules/playwright/lib/common/index.js:1283:52)
+    at loadConfig (/workspace/project/node_modules/playwright/lib/common/index.js:1290:28)
+    at processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at Object.loadConfigFromFile (/workspace/project/node_modules/playwright/lib/common/index.js:1508:10)
+    at runTests (/workspace/project/node_modules/playwright/lib/cli/testActions.js:44:18)
+    at _Command.<anonymous> (/workspace/project/node_modules/playwright/lib/program.js:55:7)
