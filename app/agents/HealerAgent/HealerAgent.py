@@ -22,14 +22,13 @@ from typing import Any
 
 from openhands.sdk import Agent, Conversation, Tool
 from openhands.sdk.event import ObservationEvent
-from openhands.sdk.llm import content_to_str
 from openhands.sdk.workspace import BaseWorkspace
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.glob import GlobTool
 from openhands.tools.grep import GrepTool
 from openhands.tools.terminal import TerminalTool
 
-from app.agents.AnalyzerAgent.AgentEventMapper import MAX_MESSAGE_CHARS, AgentEvent, clip
+from app.agents.AnalyzerAgent.AgentEventMapper import MAX_MESSAGE_CHARS, AgentEvent, clip, observation_text
 from app.agents.HealerAgent.HealerGuards import check_changes
 from app.agents.HealerAgent.HealerPrompts import BLOCKED_MARKER, build_heal_prompt
 from app.config import settings
@@ -150,7 +149,7 @@ class HealerAgent:
             error = failure.message
         finally:
             last_steps = describe_last_steps(conversation)
-            close_conversation(conversation)
+            token_usage = close_conversation(conversation, self.llm_config.model)
             if not had_git_dir:
                 shutil.rmtree(snapshot.root / GIT_DIR, ignore_errors=True)
 
@@ -171,6 +170,7 @@ class HealerAgent:
             "blocker": blocker,
             "blocker_rejected": rejected,
             "seconds": max(time.monotonic() - started - paused, 0.0),
+            "token_usage": token_usage,
         })
 
     def _outcome(
@@ -215,7 +215,7 @@ class CommandOutputLog:
     def __call__(self, event: Any) -> None:
         try:
             if isinstance(event, ObservationEvent) and event.tool_name == TerminalTool.name:
-                text = "".join(content_to_str(event.observation.to_llm_content))
+                text = observation_text(event.observation)
                 self._parts.append(text)
                 self._size += len(text)
                 while self._size > MAX_RECORDED_OUTPUT_CHARS and len(self._parts) > 1:

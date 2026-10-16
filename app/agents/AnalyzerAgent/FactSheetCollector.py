@@ -119,6 +119,8 @@ BUILD_TOOL_FILES: dict[str, str] = {
     "Gemfile": "Bundler",
     "go.mod": "Go modules",
 }
+# Files that start the build tool: the project's Gradle wrapper (the sandbox images have no `gradle` of their own).
+LAUNCHER_FILES = frozenset({"gradlew"})
 # Manifest -> lock files that name the tool actually used when they sit next to it (first match wins).
 LOCK_FILES: dict[str, dict[str, str]] = {
     "package.json": {
@@ -491,6 +493,8 @@ def _add_file(scan: _Scan, path: str, name: str, in_uft_action: bool) -> None:
 
     if build_tool := _BUILD_TOOL_RULES.get(name):
         scan.build_files.append((path, build_tool))
+        scan.marker_files.add(path)
+    if name in LAUNCHER_FILES:
         scan.marker_files.add(path)
     if name in _LOCK_FILE_NAMES:
         scan.lock_files[(_parent_of(path), name)] = path

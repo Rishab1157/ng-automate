@@ -12,10 +12,14 @@ from bson import ObjectId
 from app.core.exceptions import ErrorCode, ErrorMessages, NotFoundError, SandboxError, ValidationError
 from app.services.sandboxService import SandboxService, SandboxSession
 from app.services.sandboxService.SandboxService import (
+    BLOCKED_NETWORKS,
     NETWORK_ICC_OPTION,
+    NETWORK_IPV6_OPTION,
     SANDBOX_PROJECT_DIR,
     LiveViewError,
     _SandboxDockerWorkspace,
+    default_allowed_endpoints,
+    egress_rules,
 )
 from openhands.workspace import DockerWorkspace
 from tests.conftest import make_zip
@@ -234,6 +238,7 @@ def test_open_readonly_mounts_the_project_read_only(
         "detach_logs": False,
         "health_check_timeout": 30,
         "network": None,
+        "extra_run_args": ["--cap-drop", "NET_RAW"],
     }
     assert len(session_key) >= 40
     assert SANDBOX_PROJECT_DIR == "/workspace/project"
@@ -605,6 +610,156 @@ def test_limits_must_be_positive(tmp_path: Path, field: str) -> None:
         SandboxService(data_dir=tmp_path, workspace_factory=FakeWorkspaceFactory(), **{field: 0})
 
 
+def test_network_with_ipv6_is_refused(
+    tmp_path: Path, factory: FakeWorkspaceFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docker = FakeDocker(_inspected({NETWORK_ICC_OPTION: "false", NETWORK_IPV6_OPTION: "true"}))
+    service = _network_service(tmp_path, factory, docker, monkeypatch)
+
+    with pytest.raises(SandboxError) as caught:
+        with service.open_readonly(_project_dir(tmp_path)):
+            pass
+
+    assert "its network is not isolated" in caught.value.message
+    assert factory.calls == []
+
+
+# ---------- egress firewall: no private addresses (this machine, the LAN) ----------
+
+MODEL_SERVER = ("192.168.3.90", 11435)
+
+
+def _firewalled_service(
+    tmp_path: Path, factory: FakeWorkspaceFactory, docker: "FakeDocker", monkeypatch: pytest.MonkeyPatch, **options: Any
+) -> SandboxService:
+    service = SandboxService(
+        image="test-image:1", cpus=1.5, memory_mb=512, startup_timeout_seconds=30, data_dir=tmp_path / "data",
+        workspace_factory=factory, network="ngauto-test-net", firewall_image="fw-image:1",
+        allowed_endpoints=[MODEL_SERVER], **options,
+    )
+    monkeypatch.setattr(service, "_run_docker", docker)
+    return service
+
+
+def test_rules_refuse_private_addresses_but_allow_the_model_server_and_answers() -> None:
+    rules = egress_rules([MODEL_SERVER, ("host.docker.internal", 11434)]).splitlines()
+
+    assert rules[:4] == [
+        "*filter",
+        ":OUTPUT ACCEPT [0:0]",
+        "-A OUTPUT -o lo -j ACCEPT",
+        "-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",  # agent server and live view answers
+    ]
+    # Allowed endpoints come before the refusals: only that TCP port of that host.
+    assert rules[4:6] == [
+        "-A OUTPUT -p tcp -d 192.168.3.90 --dport 11435 -j ACCEPT",
+        "-A OUTPUT -p tcp -d host.docker.internal --dport 11434 -j ACCEPT",
+    ]
+    assert rules[6:-1] == [f"-A OUTPUT -d {net} -j REJECT --reject-with icmp-admin-prohibited" for net in BLOCKED_NETWORKS]
+    assert rules[-1] == "COMMIT"
+    assert {"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"} <= set(BLOCKED_NETWORKS)
+
+
+def test_rules_are_set_from_a_helper_container_before_the_session_is_handed_out(
+    tmp_path: Path, factory: FakeWorkspaceFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docker = FakeDocker(_inspected({NETWORK_ICC_OPTION: "false"}))
+    service = _firewalled_service(tmp_path, factory, docker, monkeypatch)
+    seen: list[list[str]] = []
+
+    with service.open_writable(_project_dir(tmp_path), ORG_ID, on_started=lambda _: seen.append(docker.calls[-1])):
+        pass
+
+    helper = docker.calls[2]  # after the network check and the limits
+    assert helper == [
+        "run", "--rm", "-i", "--pull", "never", "--network", f"container:{CONTAINER_ID}",
+        "--cap-drop", "ALL", "--cap-add", "NET_ADMIN", "--", "fw-image:1",
+    ]
+    assert docker.inputs[2] == egress_rules([MODEL_SERVER])
+    assert seen == [helper]
+    # Root in the sandbox cannot send raw packets past the rules.
+    assert factory.calls[0]["extra_run_args"][:2] == ["--cap-drop", "NET_RAW"]
+
+
+@pytest.mark.parametrize(
+    ("stderr", "reason"),
+    [
+        ("Error response from daemon: No such image: fw-image:1", "the sandbox firewall image is not built"),
+        ("iptables-restore: line 5 failed", "its network rules could not be set"),
+    ],
+)
+def test_a_sandbox_whose_rules_cannot_be_set_is_stopped(
+    tmp_path: Path, factory: FakeWorkspaceFactory, monkeypatch: pytest.MonkeyPatch, stderr: str, reason: str
+) -> None:
+    docker = FakeDocker(_inspected({NETWORK_ICC_OPTION: "false"}), _completed(), _completed(1, stderr))
+    service = _firewalled_service(tmp_path, factory, docker, monkeypatch)
+    started: list[str] = []
+
+    with pytest.raises(SandboxError) as caught:
+        with service.open_readonly(_project_dir(tmp_path), on_started=started.append):
+            pass
+
+    assert reason in caught.value.message
+    assert started == []
+    assert factory.workspace.cleanup_calls == 1
+
+
+def test_no_helper_runs_when_the_firewall_is_off(
+    tmp_path: Path, factory: FakeWorkspaceFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docker = FakeDocker(_inspected({NETWORK_ICC_OPTION: "false"}))
+    service = _firewalled_service(tmp_path, factory, docker, monkeypatch, egress_firewall=False)
+
+    with service.open_readonly(_project_dir(tmp_path)):
+        pass
+
+    assert not any(call[0] == "run" for call in docker.calls)
+
+
+def test_docker_gets_stdin_with_plain_newlines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Text mode would send "\r\n" on Windows, and iptables-restore rejects such lines.
+    sent: list[Any] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        sent.append(kwargs["input"])
+        return subprocess.CompletedProcess(args, 0, b"out\n", b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = _service(tmp_path)._run_docker(["run"], input="*filter\nCOMMIT\n")
+
+    assert sent == [b"*filter\nCOMMIT\n"]
+    assert result.stdout == "out\n" and result.returncode == 0
+
+
+def test_allowed_endpoints_are_the_local_model_server_and_the_listed_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "SANDBOX_ALLOWED_HOSTS", ["10.0.0.5:8081"])
+    monkeypatch.setattr(settings, "USE_LOCAL_LLM", True)
+    monkeypatch.setattr(settings, "LLM_BASE_URL", "http://localhost:11434/v1")
+    # A model server on this machine: sandboxes reach it through the host alias, on that port only.
+    assert default_allowed_endpoints() == [("10.0.0.5", 8081), (settings.SANDBOX_HOST_ALIAS, 11434)]
+
+    monkeypatch.setattr(settings, "LLM_BASE_URL", "https://models.example.com/v1")
+    assert default_allowed_endpoints()[-1] == ("models.example.com", 443)
+
+    monkeypatch.setattr(settings, "USE_LOCAL_LLM", False)  # model connections: only the listed hosts
+    assert default_allowed_endpoints() == [("10.0.0.5", 8081)]
+
+
+@pytest.mark.parametrize("entry", ["nexus.local", "10.0.0.5:99999", "[::1]:80", "-x:80"])
+def test_a_bad_allowed_host_fails_when_the_service_is_made(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "SANDBOX_ALLOWED_HOSTS", [entry])
+
+    with pytest.raises(ValueError):
+        SandboxService(data_dir=tmp_path, workspace_factory=FakeWorkspaceFactory())
+
+
 # ---------- real Docker (opt-in) ----------
 
 @pytest.mark.docker
@@ -636,6 +791,29 @@ def test_real_sandbox_reads_but_cannot_write_the_project(tmp_path: Path) -> None
 
 
 
+
+@pytest.mark.docker
+@docker_tests
+def test_real_sandbox_cannot_reach_this_machine(tmp_path: Path) -> None:
+    service = SandboxService(cpus=1, memory_mb=1024, data_dir=tmp_path / "data")
+
+    with service.open_readonly(_project_dir(tmp_path)) as session:
+        # The agent server's own port, published on this machine: without the rules the sandbox reaches it.
+        port = int(str(session.workspace.host).rpartition(":")[2])
+        probe = (
+            "import socket\n"
+            "try:\n"
+            f"    socket.create_connection(('host.docker.internal', {port}), timeout=5)\n"
+            "    print('REACHED')\n"
+            "except OSError as error:\n"
+            "    print('BLOCKED', error)\n"
+        )
+        result = session.workspace.execute_command(f"python3 -c \"{probe}\"")
+        still_served = session.workspace.execute_command("echo still-served")  # answers into the sandbox still flow
+
+    assert "BLOCKED" in result.stdout, result.stdout
+    assert still_served.exit_code == 0 and "still-served" in still_served.stdout
+
 # ---------- test sandboxes and their live view ----------
 
 ORG_ID = str(ObjectId())
@@ -653,11 +831,12 @@ def test_test_sandbox_publishes_the_live_view_port_and_gets_shared_memory(
 
     writable, readonly = factory.calls
     assert writable["extra_ports"] is True
-    assert writable["extra_run_args"] == ["--shm-size=1g"]
+    assert writable["extra_run_args"] == ["--cap-drop", "NET_RAW", "--shm-size=1g"]
     assert writable["volumes"][0].endswith(":/workspace/project:rw")
     # Build caches are per organization.
     assert any(volume.startswith(f"ngauto-maven-{ORG_ID}:") for volume in writable["volumes"])
-    assert "extra_ports" not in readonly and "extra_run_args" not in readonly
+    assert "extra_ports" not in readonly
+    assert readonly["extra_run_args"] == ["--cap-drop", "NET_RAW"]
 
 
 def test_live_view_token_goes_to_the_container_on_stdin(service: SandboxService, docker: FakeDocker) -> None:

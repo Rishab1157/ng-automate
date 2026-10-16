@@ -55,21 +55,24 @@ def _seed(mongo: MongoClient, org_id: str, *, enabled: bool = True, active: bool
     }).inserted_id)
 
 
-@pytest.mark.anyio
-@pytest.mark.parametrize("blank", [None, "", "  ", "undefined", "null", "None"])
-async def test_no_connection_uses_default(app_db: MongoClient, blank: str | None) -> None:
+class NoDatabase:
+    def __getattr__(self, name: str) -> Any:
+        raise AssertionError("the local model never reads the database")
+
+
+def _without_database() -> ModelConnectionService:
     service = ModelConnectionService()
-
-    class NoDatabase:
-        def __getattr__(self, name: str) -> Any:
-            raise AssertionError("without a model connection id the database must not be read")
-
     service.model_conn_repo = NoDatabase()  # type: ignore[assignment]
     service.module_service = NoDatabase()  # type: ignore[assignment]
+    return service
 
-    config = await service.get_llm_config(blank, str(ObjectId()))
 
-    # Everything comes from .env: the free default model.
+@pytest.mark.anyio
+@pytest.mark.parametrize("chosen", [None, "", "  ", "undefined", "null", "None", str(ObjectId()), "abc"])
+async def test_the_local_model_is_used_whatever_connection_was_chosen(app_db: MongoClient, chosen: str | None) -> None:
+    config = await _without_database().get_llm_config(chosen, str(ObjectId()))
+
+    # USE_LOCAL_LLM (the default): everything comes from .env, the free local model.
     assert config.model == settings.LLM_MODEL
     assert config.base_url == settings.LLM_BASE_URL
     assert config.num_ctx == settings.LLM_NUM_CTX
@@ -79,6 +82,39 @@ async def test_no_connection_uses_default(app_db: MongoClient, blank: str | None
 
 
 @pytest.mark.anyio
+async def test_with_the_local_model_a_request_uses_no_connection(app_db: MongoClient) -> None:
+    service = _without_database()
+
+    assert await service.connection_for_request(str(ObjectId()), str(ObjectId()), stored=str(ObjectId())) is None
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("model_connections_only")
+@pytest.mark.parametrize("blank", [None, "", "  ", "undefined", "null", "None"])
+async def test_without_the_local_model_a_connection_is_required(app_db: MongoClient, blank: str | None) -> None:
+    service = _without_database()
+
+    with pytest.raises(ValidationError) as error:
+        await service.get_llm_config(blank, str(ObjectId()))
+    assert error.value.error_code.value == "MODEL_CONNECTION_REQUIRED"
+    with pytest.raises(ValidationError):
+        await service.connection_for_request(blank, str(ObjectId()))
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("model_connections_only")
+async def test_a_request_uses_the_connection_sent_or_else_the_one_chosen_before(app_db: MongoClient, org_id: str) -> None:
+    sent, stored = _seed(app_db, org_id), _seed(app_db, org_id)
+    service = ModelConnectionService()
+
+    assert await service.connection_for_request(sent, org_id, stored=stored) == sent
+    assert await service.connection_for_request("undefined", org_id, stored=stored) == stored
+    with pytest.raises(NotFoundError):  # checked now, not minutes later in the background
+        await service.connection_for_request(str(ObjectId()), org_id)
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("model_connections_only")
 async def test_enabled_connection_resolves(app_db: MongoClient, org_id: str) -> None:
     config = await ModelConnectionService().get_llm_config(_seed(app_db, org_id), org_id)
 
@@ -88,6 +124,7 @@ async def test_enabled_connection_resolves(app_db: MongoClient, org_id: str) -> 
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("model_connections_only")
 @pytest.mark.parametrize("variant", ["other_org", "not_enabled", "inactive", "provider_inactive", "unknown_id"])
 async def test_unusable_connections_are_not_found(app_db: MongoClient, org_id: str, variant: str) -> None:
     connection_id = {
@@ -104,6 +141,7 @@ async def test_unusable_connections_are_not_found(app_db: MongoClient, org_id: s
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("model_connections_only")
 async def test_malformed_id_is_rejected(app_db: MongoClient) -> None:
     with pytest.raises(ValidationError):
         await ModelConnectionService().get_llm_config("abc", str(ObjectId()))

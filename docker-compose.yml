@@ -2,6 +2,7 @@
 #   docker compose up -d                                 # MongoDB (our database) and Qdrant (the healer's memory)
 #   docker compose --profile build build agent-server    # our OpenHands agent server, from the vendored SDK in third_party/
 #   docker compose --profile build build sandbox-test    # the sandbox image the runner, healer and generator use (on it)
+#   docker compose --profile build build sandbox-firewall  # sets each sandbox's network rules (no private addresses)
 #
 # Values come from .env (compose reads it for the ${...} below). Ports are bound to this machine only.
 # Not here, on purpose:
@@ -53,6 +54,13 @@ services:
   sandbox-test:
     image: ng-automate/sandbox-test:1.53.0-source
     build: docker/sandbox-test
+    profiles: ["build"]
+
+  # Sets every sandbox's outgoing-traffic rules from outside the sandbox (SANDBOX_FIREWALL_IMAGE). Sandboxes do not
+  # start without it: docker compose --profile build build sandbox-firewall
+  sandbox-firewall:
+    image: ng-automate/sandbox-firewall:1
+    build: docker/sandbox-firewall
     profiles: ["build"]
 
 volumes:

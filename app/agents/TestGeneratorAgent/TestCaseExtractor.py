@@ -20,6 +20,7 @@ from typing import Any
 from app.config import settings
 from app.models.llmModel import LlmConfigModel
 from app.models.testDataModel import TestCaseSpecModel, TestDataFormat, TestDataSetModel, TestStepModel
+from app.models.tokenUsageModel import TokenUsageModel
 from app.utils.StructuredOutput import complete_json
 from app.utils.TestDataParser import NAVIGATION_ACTIONS, build_test_data_set
 
@@ -91,6 +92,8 @@ class TestCaseExtractor:
         self.llm_config = llm_config
         self.complete = complete
         self.timeout_seconds = timeout_seconds
+        # What extract()'s LLM calls used, also when it fails.
+        self.token_usage = TokenUsageModel()
 
     def extract(self, text: str, source_format: TestDataFormat) -> TestDataSetModel:
         """Raises ValueError when no test case could be read at all."""
@@ -112,6 +115,7 @@ class TestCaseExtractor:
                     _schema([block.id for block in chunk]),
                     _parse_reply,
                     timeout_seconds=self.timeout_seconds,
+                    on_usage=self._count_usage,
                 )
             except ValueError as error:
                 logger.warning("Could not read part %d of a test-data source: %s", part, error)
@@ -124,6 +128,9 @@ class TestCaseExtractor:
             raise ValueError(failures[0] if failures else NO_CASES_FOUND)
         data_set = build_test_data_set(cases, source_format)
         return data_set.model_copy(update={"warnings": [*failures, *warnings, *data_set.warnings]})
+
+    def _count_usage(self, usage: TokenUsageModel) -> None:
+        self.token_usage = self.token_usage.add(usage)
 
 
 def split_blocks(text: str, source_format: TestDataFormat) -> list[SourceBlock]:

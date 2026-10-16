@@ -34,10 +34,18 @@ from app.models.analyzerModel import AnalyzerFindingsModel, FactModel, FactSheet
 from app.models.healerModel import HealOutcomeModel
 from app.models.healMemoryModel import SUCCESSFUL_RESULTS, HealMemoryMapper, HealMemoryModel, memory_point_id
 from app.models.llmModel import LlmConfigModel
-from app.models.runModel import RunEventType, RunStage, TestAttemptModel, TestStopReason
+from app.models.runModel import (
+    RunEventType,
+    RunStage,
+    RunTokenUsageModel,
+    TestAttemptModel,
+    TestStopReason,
+    TokenUsageStage,
+)
 from app.models.testDataModel import TestDataStatus
 from app.models.testGeneratorModel import GenerationOutcomeModel
 from app.models.testRunModel import TestCommandModel, TestRunResultModel
+from app.models.tokenUsageModel import TokenUsageModel
 from app.services.healMemoryService import HealMemoryService
 from app.services.modelConnectionService import ModelConnectionService
 from app.services.projectProfileService import ProjectProfileService
@@ -151,14 +159,21 @@ class MasterNodes:
         fact_sheet = FactSheetModel.model_validate(state["fact_sheet"])
         project_dir = Path(state["project_dir"])
         bridge = _AgentBridge(asyncio.get_running_loop(), self.run_service, run_id, state["org_id"])
-        findings = await self._in_sandbox(
-            run_id,
-            bridge,
-            lambda: self.sandbox_service.open_readonly(project_dir, bridge.on_started),
-            lambda session: self.analyzer_factory(llm_config).analyze(
-                session.workspace, fact_sheet, bridge.on_event, control=agent_control(run_id)
-            ),
-        )
+        analyzers: list[AnalyzerAgent] = []  # created once the sandbox is up; read for its token usage
+
+        def analyze(session: SandboxSession) -> AnalyzerFindingsModel:
+            analyzers.append(self.analyzer_factory(llm_config))
+            return analyzers[0].analyze(session.workspace, fact_sheet, bridge.on_event, control=agent_control(run_id))
+
+        try:
+            findings = await self._in_sandbox(
+                run_id, bridge, lambda: self.sandbox_service.open_readonly(project_dir, bridge.on_started), analyze
+            )
+        except Exception:
+            # A failed analysis used tokens too.
+            await self._count_tokens(state, "analyze", _token_usage(analyzers))
+            raise
+        tokens = await self._count_tokens(state, "analyze", _token_usage(analyzers))
 
         findings, removed = await asyncio.to_thread(verify_evidence, findings, project_dir)
         if removed:
@@ -178,7 +193,7 @@ class MasterNodes:
             important_paths=len(findings.important_paths),
             open_questions=len(findings.open_questions),
         )
-        return {"findings": findings.model_dump(mode="json"), "llm_model": llm_config.model}
+        return {"findings": findings.model_dump(mode="json"), "llm_model": llm_config.model, **tokens}
 
     async def save_profile(self, state: MasterState) -> MasterState:
         stage = RunStage.SAVING_PROFILE
@@ -222,12 +237,13 @@ class MasterNodes:
                 control=agent_control(run_id), instructions=state.get("instructions"),
             ),
         )
+        tokens = await self._count_tokens(state, "generate", outcome.token_usage)
         await self.run_service.save_outputs(run_id, generation=outcome)
         if not outcome.files:
             # The generator's error is already a full message ("The test generator stopped: ...").
             raise GenerationError(outcome.error or ErrorMessages.GENERATION_FAILED.format(reason=NO_GENERATED_FILES))
         await self._finish_stage(state, stage, _describe_generation(outcome), **_generation_summary(outcome))
-        return {"generation": outcome.model_dump(mode="json")}
+        return {"generation": outcome.model_dump(mode="json"), **tokens}
 
     async def test_and_heal(self, state: MasterState) -> MasterState:
         """Run the tests; while the failure is the healer's job, let the healer fix it and run them again.
@@ -254,6 +270,7 @@ class MasterNodes:
         reason: TestStopReason | None = None
         detail: str | None = None
         budget_left = self.heal_budget_seconds
+        tokens: MasterState = {}
         sandbox = ExitStack()
         cancelled = False
         try:
@@ -283,11 +300,17 @@ class MasterNodes:
                     break
 
                 await self._start_stage(state, RunStage.HEALING, attempt=number)
-                memories = await self.heal_memory_service.recall(org_id=org_id, run_id=run_id, result=result)
+                memories = await self.heal_memory_service.recall(
+                    org_id=org_id, project_id=state["project_id"], run_id=run_id, result=result
+                )
                 if memories:
                     await self.run_service.append_event(
                         run_id, org_id, RunEventType.AGENT_MESSAGE, _describe_memories(memories),
                         data={"memories": [_memory_summary(memory) for memory in memories]},
+                    )
+                elif self.heal_memory_service.problem:  # e.g. the embedding server does not answer: not silent
+                    await self.run_service.append_event(
+                        run_id, org_id, RunEventType.AGENT_MESSAGE, self.heal_memory_service.problem
                     )
                 healer = self.healer_factory(llm_config)
                 previous = [attempt.heal for attempt in attempts if attempt.heal is not None]
@@ -300,6 +323,8 @@ class MasterNodes:
                     )
                 )
                 budget_left -= outcome.seconds
+                # {**state, **tokens}: the run's usage with this loop's earlier heals.
+                tokens = await self._count_tokens({**state, **tokens}, "heal", outcome.token_usage) or tokens
                 await bridge.drain(EVENT_DRAIN_TIMEOUT_SECONDS)
                 attempts[-1] = attempts[-1].model_copy(update={"heal": outcome})
                 await self.run_service.save_outputs(run_id, test_attempts=attempts)
@@ -340,7 +365,24 @@ class MasterNodes:
             "test_command": command.model_dump(mode="json"),
             "test_attempts": [attempt.model_dump(mode="json") for attempt in attempts],
             "test_report": report.model_dump(mode="json"),
+            **tokens,
         }
+
+    async def _count_tokens(
+        self, state: MasterState, stage: TokenUsageStage, usage: TokenUsageModel | None
+    ) -> MasterState:
+        """Add a stage's token usage to the run's (state["token_usage"]): saved on the run, logged, and returned as the
+        state update. {} when there is nothing to add, or it could not be saved: counting tokens never fails a run."""
+        if usage is None:
+            return {}
+        try:
+            totals = RunTokenUsageModel.model_validate(state.get("token_usage") or {}).add(stage, usage)
+            logger.info("Run %s: %s used tokens: %s", state["run_id"], stage, usage.describe())
+            await self.run_service.save_outputs(state["run_id"], token_usage=totals)
+        except Exception:
+            logger.warning("Could not save the token usage of run %s", state["run_id"], exc_info=True)
+            return {}
+        return {"token_usage": totals.model_dump(mode="json")}
 
     async def _remember_heal(
         self,
@@ -495,6 +537,10 @@ class _AgentBridge:
     def _forget(self, future: concurrent.futures.Future[Any]) -> None:
         with self._pending_lock:
             self._pending.discard(future)
+
+
+def _token_usage(agents: list[AnalyzerAgent]) -> TokenUsageModel | None:
+    return getattr(agents[0], "token_usage", None) if agents else None
 
 
 def _describe_fact_sheet(fact_sheet: FactSheetModel) -> str:

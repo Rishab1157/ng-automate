@@ -25,5 +25,6 @@ class TestDataCreateDbModel(BaseModel):
     data_set: dict[str, Any] | None = None
     case_count: int = 0
     error: str | None = None
+    revision: int = 0
     created_at: datetime
     updated_at: datetime

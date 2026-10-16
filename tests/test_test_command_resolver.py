@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import pytest
 
+from app.agents.AnalyzerAgent.FactSheetCollector import collect_fact_sheet
 from app.agents.RunnerAgent.TestCommandResolver import UnsupportedStackError, resolve_test_command
 from app.core.exceptions import ValidationError
 from app.models.analyzerModel import Confidence, FactModel, FactSheetModel, FactSource
@@ -38,11 +41,30 @@ def test_tag_with_spaces_is_quoted() -> None:
     assert command.command == "mvn -B -ntp test '-Dcucumber.filter.tags=@smoke and @login'"
 
 
-@pytest.mark.parametrize(("markers", "expected"), [(["gradlew", "build.gradle"], "./gradlew"), (["build.gradle"], "gradle")])
+@pytest.mark.parametrize(("markers", "expected"), [
+    (["gradlew", "build.gradle"], "{ [ -x gradlew ] || chmod +x gradlew; } && ./gradlew"),  # the project's wrapper, made executable when it is not
+    (["build.gradle"], "gradle"),
+    (["tools/gradlew", "build.gradle"], "gradle"),  # a wrapper elsewhere does not run from the project root
+])
 def test_gradle_wrapper_or_not(markers: list[str], expected: str) -> None:
-    command = resolve_test_command(_sheet("Gradle", ["JUnit 5"], markers=markers))
+    command = resolve_test_command(_sheet("Gradle", ["JUnit 5"], markers=markers), test_files=["src/test/java/a/LoginTest.java"])
 
-    assert command.command.startswith(f"{expected} test --no-daemon")
+    assert command.command == f"{expected} test --no-daemon --tests a.LoginTest"
+    assert command.check == f"{expected} testClasses --no-daemon -q"
+
+
+def test_the_fact_sheet_records_the_gradle_wrapper_so_the_commands_use_it(tmp_path: Path) -> None:
+    (tmp_path / "src/test/java").mkdir(parents=True)
+    (tmp_path / "src/test/java/LoginTest.java").write_text("public class LoginTest { @Test public void ok() {} }")
+    (tmp_path / "build.gradle").write_text("plugins { id 'java' }\n")
+    without_wrapper = resolve_test_command(collect_fact_sheet(tmp_path))
+    (tmp_path / "gradlew").write_text("#!/bin/sh\n")
+
+    command = resolve_test_command(collect_fact_sheet(tmp_path))
+
+    assert without_wrapper.command == "gradle test --no-daemon"
+    assert command.command == "{ [ -x gradlew ] || chmod +x gradlew; } && ./gradlew test --no-daemon"
+    assert command.check == "{ [ -x gradlew ] || chmod +x gradlew; } && ./gradlew testClasses --no-daemon -q"
 
 
 def test_pytest_path_and_keyword() -> None:
@@ -201,6 +223,11 @@ def test_is_test_file(path: str, expected: bool) -> None:
     ("public class LoginTest extends BaseTest {\n  @Test public void valid() {}\n}\n", True),
     ("@RunWith(Cucumber.class)\n@CucumberOptions(features = \"src/test/resources\")\npublic class RunCucumberTest {}\n", True),
     ("public class RunnerTest extends AbstractTestNGCucumberTests {}\n", True),
+    # A JUnit Platform runner for Cucumber (the runner the generator may add for feature files the user asked for).
+    ("@Suite\n@IncludeEngines(\"cucumber\")\n@SelectClasspathResource(\"ngauto\")\npublic class RunCucumberTest {}\n",
+     True),
+    # Step definitions run nothing on their own.
+    ("public class LoginSteps {\n  @Given(\"the login page\") public void open() {}\n}\n", False),
     (None, False),  # unreadable
 ])
 def test_jvm_test_classes_need_tests_inside(content: str | None, expected: bool) -> None:

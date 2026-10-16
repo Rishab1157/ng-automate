@@ -1,5 +1,6 @@
 from bson import ObjectId
 
+from app.config import settings
 from app.core.exceptions import ErrorCode, ErrorMessages, NotFoundError, ValidationError
 from app.models.llmModel import LlmConfigModel
 from app.models.modelConnectionModel import ModelConnectionMapper
@@ -13,7 +14,7 @@ _NO_CONNECTION = {"", "undefined", "null", "none"}
 
 
 def connection_id_or_none(model_connection_id: str | None) -> str | None:
-    """The connection id to store, or None when none was chosen (the default model from .env is used then)."""
+    """The connection id that was chosen, or None when none was."""
     if model_connection_id is None or model_connection_id.strip().lower() in _NO_CONNECTION:
         return None
     return model_connection_id.strip()
@@ -26,10 +27,26 @@ class ModelConnectionService:
         self.model_conn_repo = ModelConnectionRepository()
         self.module_service = ModuleService()
 
+    async def connection_for_request(
+        self, model_connection_id: str | None, org_id: str, stored: str | None = None
+    ) -> str | None:
+        """The model connection a request's work will use, checked now (400/404) rather than minutes later in the
+        background. None with USE_LOCAL_LLM (the local model; a chosen connection is ignored). Otherwise the one sent
+        or, when none was sent, `stored` (chosen earlier for the same work), and one of them is required."""
+        if settings.USE_LOCAL_LLM:
+            return None
+        connection_id = connection_id_or_none(model_connection_id) or stored
+        await self.get_llm_config(connection_id, org_id)
+        return connection_id
+
     async def get_llm_config(self, model_connection_id: str | None, org_id: str) -> LlmConfigModel:
-        """No connection -> the default model (Devstral). Otherwise the org's connection enabled for NG Automate."""
-        if connection_id_or_none(model_connection_id) is None:
+        """USE_LOCAL_LLM -> the local model from .env, whatever was chosen. Otherwise the org's connection enabled for
+        NG Automate, which is then required."""
+        if settings.USE_LOCAL_LLM:
             return get_default_llm_config()
+        model_connection_id = connection_id_or_none(model_connection_id)
+        if model_connection_id is None:
+            raise ValidationError(ErrorMessages.MODEL_CONNECTION_REQUIRED, error_code=ErrorCode.MODEL_CONNECTION_REQUIRED)
         if not ObjectId.is_valid(model_connection_id):
             raise ValidationError(ErrorMessages.INVALID_OBJECT_ID.format(field="model_connection_id"))
 

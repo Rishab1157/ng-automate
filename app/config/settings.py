@@ -55,9 +55,19 @@ class Settings(BaseSettings):
     # internet and the host reaches its published ports, but no sandbox can reach another one.
     SANDBOX_NETWORK: str = "ngauto-sandboxes"
     # Agents run inside a sandbox container, where 127.0.0.1 is the container itself: a model server on the
-    # machine that runs the API is only reachable through this host-gateway alias. A loopback LLM base URL is
-    # rewritten to it for sandboxed agents (the sandbox is started with the alias already added).
+    # machine that runs the API is only reachable through this host alias (Docker Desktop gives every container this
+    # name). A loopback LLM base URL is rewritten to it for sandboxed agents.
     SANDBOX_HOST_ALIAS: str = "host.docker.internal"
+    # Sandboxes reach the internet (package downloads) and the model server, but nothing on a private address: not this
+    # machine's services (QXcel's MongoDB, Qdrant, the API: all reachable through the host alias, also when they listen
+    # on 127.0.0.1 only), not the LAN, not cloud metadata. A helper container sets the rules from outside the sandbox
+    # (docker/sandbox-firewall; build it once: docker compose --profile build build sandbox-firewall) and the sandbox
+    # has no NET_ADMIN, so not even root in it can lift them.
+    SANDBOX_EGRESS_FIREWALL: bool = True
+    SANDBOX_FIREWALL_IMAGE: str = "ng-automate/sandbox-firewall:1"
+    # Private "host:port" endpoints sandboxes may still reach (JSON list), e.g. a model connection's server or a package
+    # registry on the LAN. The local model's server (LLM_BASE_URL, when USE_LOCAL_LLM) is allowed without being listed.
+    SANDBOX_ALLOWED_HOSTS: list[str] = []
     # How long a live-view ticket opens new connections (an open connection stays open).
     LIVE_VIEW_TICKET_SECONDS: int = 600
 
@@ -131,7 +141,12 @@ class Settings(BaseSettings):
     # One LLM call that reads a part of a free-form test-data source (a small local model needs minutes).
     TEST_DATA_LLM_TIMEOUT_SECONDS: int = 1200
 
-    # Default LLM, used when a request has no model connection
+    # true: every agent uses the local model below (LLM_*), and a request's model_connection_id is ignored. false:
+    # every request whose work needs a model must name one of the organization's QXcel model connections
+    # (the model_connection_id query parameter), and the local model is never used.
+    USE_LOCAL_LLM: bool = True
+
+    # The local LLM (USE_LOCAL_LLM)
     LLM_MODEL: str
     LLM_BASE_URL: str | None = None
     LLM_API_KEY: SecretStr | None = None

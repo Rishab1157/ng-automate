@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -8,6 +8,7 @@ from app.models.analyzerModel import AnalyzerFindingsModel, FactSheetModel
 from app.models.healerModel import HealOutcomeModel
 from app.models.testGeneratorModel import GenerationOutcomeModel
 from app.models.testRunModel import FailureKind, TestCommandModel, TestRunResultModel
+from app.models.tokenUsageModel import TokenUsageModel
 
 
 class RunStatus(str, Enum):
@@ -61,6 +62,7 @@ class RunEventType(str, Enum):
     RUN_CANCELLED = "run_cancelled"
     USER_MESSAGE = "user_message"  # a message a user sent to the working agent
     COMMAND = "command"  # pause / resume / stop requests and what came of them
+    TOKEN_USAGE = "token_usage"  # at the end of a run: the tokens its LLM calls used in all
 
 
 class RunEventLevel(str, Enum):
@@ -122,6 +124,27 @@ class TestReportModel(BaseModel):
     changed_files: list[str] = Field(default_factory=list)
 
 
+TokenUsageStage = Literal["analyze", "generate", "heal"]
+
+
+class RunTokenUsageModel(BaseModel):
+    """Tokens the run's agents used: per stage, and in all. Work a resumed run did again counts again (it was paid)."""
+
+    analyze: TokenUsageModel | None = None
+    generate: TokenUsageModel | None = None
+    heals: list[TokenUsageModel] = Field(default_factory=list)  # one per heal, in order
+    total: TokenUsageModel = Field(default_factory=TokenUsageModel)
+
+    def add(self, stage: TokenUsageStage, usage: TokenUsageModel) -> "RunTokenUsageModel":
+        """With `usage` added to its stage (each heal kept on its own) and to the total."""
+        if stage == "heal":
+            changes: dict[str, Any] = {"heals": [*self.heals, usage]}
+        else:
+            current: TokenUsageModel | None = getattr(self, stage)
+            changes = {stage: current.add(usage) if current is not None else usage}
+        return self.model_copy(update={**changes, "total": self.total.add(usage)})
+
+
 class RunOutputsModel(BaseModel):
     """What each finished stage produced. A stage whose output is set is skipped on resume."""
 
@@ -138,6 +161,8 @@ class RunOutputsModel(BaseModel):
     test_command: TestCommandModel | None = None
     test_attempts: list[TestAttemptModel] | None = None
     test_report: TestReportModel | None = None
+    # What the agents' LLM calls used so far.
+    token_usage: RunTokenUsageModel | None = None
 
 
 class RunModel(BaseModel):

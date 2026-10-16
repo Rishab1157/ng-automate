@@ -16,6 +16,7 @@ from app.models.testDataModel import (
     TestDataUploadModel,
     TestStepModel,
 )
+from app.models.tokenUsageModel import TokenUsageModel
 from app.services.testDataService import TestDataProcessor
 
 DATA_SET = TestDataSetModel(
@@ -38,6 +39,7 @@ class FakeService:
         self.uploads = {upload.id: upload for upload in uploads}
         self.ready: dict[str, TestDataSetModel] = {}
         self.failed: dict[str, str] = {}
+        self.token_usage: dict[str, TokenUsageModel | None] = {}
 
     async def get_by_id(self, test_data_id: str) -> TestDataUploadModel:
         if test_data_id not in self.uploads:
@@ -47,11 +49,21 @@ class FakeService:
     async def find_processing_ids(self) -> list[str]:
         return [i for i, u in self.uploads.items() if u.status == TestDataStatus.PROCESSING]
 
-    async def mark_ready(self, test_data_id: str, data_set: TestDataSetModel) -> None:
+    async def mark_ready(self, test_data_id: str, data_set: TestDataSetModel, revision: int | None = None,
+                         token_usage: TokenUsageModel | None = None) -> bool:
+        if revision is not None and revision != self.uploads[test_data_id].revision:
+            return False  # the source was edited while it was read
         self.ready[test_data_id] = data_set
+        self.token_usage[test_data_id] = token_usage
+        return True
 
-    async def mark_failed(self, test_data_id: str, reason: str) -> None:
+    async def mark_failed(self, test_data_id: str, reason: str, revision: int | None = None,
+                          token_usage: TokenUsageModel | None = None) -> bool:
+        if revision is not None and revision != self.uploads[test_data_id].revision:
+            return False
         self.failed[test_data_id] = reason
+        self.token_usage[test_data_id] = token_usage
+        return True
 
 
 class FakeConnections:
@@ -109,6 +121,31 @@ async def test_source_is_read_with_the_default_model_and_marked_ready() -> None:
 
     assert service.ready == {"t1": DATA_SET}
     assert connections.calls == [(None, "org-1")]  # no connection id -> the free default model
+
+
+@pytest.mark.anyio
+async def test_a_source_edited_while_it_is_read_is_read_again_and_only_the_new_version_counts() -> None:
+    service = FakeService(_upload("t1"))
+    edited = _upload("t1").model_copy(update={"raw_source": "TC-1: Logout\n", "revision": 1})
+    texts: list[str] = []
+
+    class EditDuringReading(FakeExtractor):
+        def extract(self, text: str, source_format: TestDataFormat) -> TestDataSetModel:
+            texts.append(text)
+            service.uploads["t1"] = edited  # the editor saves a new version meanwhile
+            return super().extract(text, source_format)
+
+    processor = TestDataProcessor(
+        test_data_service=service,  # type: ignore[arg-type]
+        model_connection_service=FakeConnections(),  # type: ignore[arg-type]
+        extractor_factory=EditDuringReading(DATA_SET),  # type: ignore[arg-type]
+    )
+
+    await processor.submit("t1")
+    await _settle(processor)
+
+    assert texts == ["TC-1: Login\n1. Open https://x\n", "TC-1: Logout\n"]
+    assert service.ready == {"t1": DATA_SET}
 
 
 @pytest.mark.anyio

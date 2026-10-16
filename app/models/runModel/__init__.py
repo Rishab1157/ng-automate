@@ -12,9 +12,11 @@ from .RunModel import (
     RunOutputsModel,
     RunStage,
     RunStatus,
+    RunTokenUsageModel,
     TestAttemptModel,
     TestReportModel,
     TestStopReason,
+    TokenUsageStage,
 )
 
 __all__ = [
@@ -32,7 +34,9 @@ __all__ = [
     "RunOutputsModel",
     "RunStage",
     "RunStatus",
+    "RunTokenUsageModel",
     "TestStopReason",
     "TestAttemptModel",
     "TestReportModel",
+    "TokenUsageStage",
 ]

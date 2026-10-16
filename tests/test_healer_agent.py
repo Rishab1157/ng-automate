@@ -20,12 +20,13 @@ from openhands.sdk.workspace import LocalWorkspace
 from openhands.tools.terminal import TerminalObservation, TerminalTool
 from pydantic import SecretStr
 
-from app.agents.AnalyzerAgent.AgentEventMapper import AgentEvent
+from app.agents.AnalyzerAgent.AgentEventMapper import AgentEvent, map_openhands_event
 from app.agents.HealerAgent.HealerAgent import (
     BLOCKER_REJECTED_NOTICE,
     HEALER_TOOL_NAMES,
     NO_SUMMARY,
     REVIEW_NOTICE,
+    CommandOutputLog,
     HealerAgent,
 )
 from app.agents.HealerAgent.HealerPrompts import MAX_OUTPUT_IN_PROMPT, build_heal_prompt
@@ -583,3 +584,21 @@ def test_a_failure_inside_the_tests_shows_the_failing_tests_not_the_build_log() 
     assert "Unable to find CDP" not in locator and "com.demo.CartTest.remove" in locator
     assert "Start in those files" in locator
     assert "Unable to find CDP" in dependency  # for build-level failures the log is the evidence
+
+
+def test_a_long_output_from_the_agent_server_is_read_without_saving_it_under_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The agent server's observation names its own folder for a long output's full text, as a relative path.
+    monkeypatch.chdir(tmp_path)
+    observation = TerminalObservation.from_text("x" * 40_000, command="mvn test", exit_code=1).model_copy(
+        update={"full_output_save_dir": "workspace/conversations/abc/observations"}
+    )
+    event = ObservationEvent(observation=observation, action_id="a1", tool_name=TerminalTool.name, tool_call_id="t1")
+    outputs = CommandOutputLog()
+
+    outputs(event)
+    mapped = map_openhands_event(event)
+
+    assert "<response clipped>" in outputs.text() and mapped is not None and "xxx" in mapped.data["output"]
+    assert list(tmp_path.iterdir()) == []

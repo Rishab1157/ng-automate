@@ -1,13 +1,15 @@
 """The test generator's messages, kept compact for a small local model.
 
-The rules are the same for every stack: they say how to work (look first, follow the project, reuse, check), never
-how one framework does it. The project supplies the details: its facts, a sample of its own code, the check command
-NG Automate chose for it and, from the second batch on, where the work stands. The user's own instructions come first.
+The rules are the same for every stack: they say how to work (understand the project first, follow it, reuse, check
+that its own tooling finds and runs the new tests), never how a framework works or where its files go: the agent
+works that out from the project. The one fixed place is the new 'ngauto' folder for the new test files. The project
+supplies the details: its facts, a sample of its own code, the check command NG Automate chose for it and, from the
+second batch on, where the work stands. The user's own instructions come first.
 """
 
 from collections.abc import Sequence
 
-from app.agents.TestGeneratorAgent.GeneratedTestPlacement import UNVERIFIED_MARKER
+from app.agents.TestGeneratorAgent.GeneratedTestPlacement import GENERATED_DIR, UNVERIFIED_MARKER
 from app.models.analyzerModel import AnalyzerFindingsModel, FactModel, FactSheetModel
 from app.models.testDataModel import TestCaseSpecModel, TestStepModel
 from app.models.testRunModel import TestCommandModel
@@ -28,25 +30,27 @@ Write one automated test for each of these test cases (from the user's test data
 {cases}
 {user_block}
 How to work (the project decides the details: look them up in it, do not assume them):
-- Look before you write. Read two or three existing tests and the shared code they use: how a test is declared, how
-  it gets its browser, page or client, how it waits, asserts and imports. The shared code is whatever this project has
-  (page objects, fixtures, hooks, base classes, helpers, step definitions, keywords, config); the files above are only
-  a sample, so search the project (grep, glob) for the rest.
+- First understand the project by exploring it: its test framework, build, structure, conventions and reusable code.
+  Read two or three existing tests and the shared code they use: how a test is declared, how it gets its browser,
+  page or client, how it waits, asserts and imports. The files above are only a sample: search the project (grep,
+  glob) for the rest.
 - Same framework and style: write the new tests with the project's own test framework, language, runner and
   conventions, so its own test command runs them. If the project mixes styles, follow the one most of its tests use.
-  Use another framework or style only when the user asks for it; then add only what that needs to run (a dependency,
-  a runner, glue) and keep the existing tests running as before.
-- Reuse first: before you write a helper, page-object method, fixture, step, keyword or setup, search the project and
-  your own new files for one that already does it, and call it. Write what several of your tests need (for example
-  logging in) once, in a shared file of your own next to your tests, organised the way this project organises such
-  code. Never copy the same block into several files, and never define a step text or keyword name that already
-  exists: duplicates break the run.
+  Use another framework or style only when the user asks for it, and keep the existing tests running as before.
+- Put your new test files only in a new folder named '{generated_dir}' (a package of that name in a language with
+  packages) inside the place where the project keeps its tests (where this framework expects tests, if it has none
+  yet). Every other file you need goes where this framework expects it, by its conventions and industry best
+  practice. Add whatever the framework needs to find and run your new tests.
+- Reuse instead of duplicating: before you write a helper, page-object method, fixture, step, keyword or setup, search
+  the project and the files you wrote (in earlier batches too) for one that already does it, and call it. Write what
+  several of your tests need (for example logging in) once, as shared code of your own, organised the way this
+  project organises such code. Never copy the same code into several files or write again what already exists.
 - One test per case, named after the case id (exactly as given, e.g. TD-001) and its title, in a form the runner
   collects. Write tests only for the cases listed here, and never a second test for a case that already has one.
-- Put your tests in new files. {placement} You may change the project's own files where your tests need it (add a
-  page-object method, a step definition, an export); such changes are kept, so keep every existing test working: add
-  instead of rewriting, never delete a project file, never change a locator or method the existing tests use, and
-  never remove or weaken a test, step or assertion.
+- You may change the project's own files where your tests need it (add a page-object method, a step definition, an
+  export); such changes are kept, so keep every existing test working: add instead of rewriting, never delete a
+  project file, never change a locator or method the existing tests use, and never remove or weaken a test, step or
+  assertion.
 - Imports: every name you use must exist and be imported from where it really is. Your file is not in the folder of
   the test you learn from, so never copy a relative import as it is: work it out from your file's own folder to the
   file it points to (from a/b/new/x, the file a/c/y is ../../c/y), and check that the file and the name exist.
@@ -66,14 +70,11 @@ How to work (the project decides the details: look them up in it, do not assume 
   project's page objects, then with `ngauto-find-elements <page URL>` in the terminal (it lists the page's elements with
   locators checked on the live page); otherwise write your best guess. Mark every locator that is in neither the test
   data nor the project with a comment saying {marker}, in that file's comment syntax, at the end of its line or on its
-  own line above it (in a feature file only on its own line). Never leave a case out.
+  own line above it. Never leave a case out.
 - If the project looks up locators by key, pass the project's KEY, not the label or the locator; with no key for an
   element, use the locator directly, or add a key the way the project adds its other keys.
 - When a step gives several locators for one element, use the first and keep the others as a fallback (candidates
   tried in order, or a clear comment beside the locator).
-- Feature files: write each step in plain language a business reader understands (the case's own words when given);
-  locators and values belong in the step definitions or page objects. Every step must match a step definition: reuse a
-  matching one, and put only the missing ones in a new step file of your own where the runner finds steps.
 - Edit files only with the file_editor tool. A new file: make its folder with `mkdir -p`, then `create` it (never
   `touch` it first: `create` does not overwrite). To add lines, use str_replace with old_str = the line just above
   where they go (copied exactly) and new_str = that line followed by the new lines. If str_replace is rejected, never
@@ -117,19 +118,20 @@ reports. A badly broken file of your own is easiest to rewrite: `rm` it, then `c
 
 _CHECK_LINE ="NG Automate checks your files after each batch, without running the tests, with: {check}"
 _NO_CHECK_LINE = "This project has no quick check that builds or loads the tests without running them."
+# Done means the project's own tooling finds and runs the new tests: a build or load check alone does not show that
+# (a real run: feature files the build never copied and no runner, so not one scenario ran, after a passing check).
+_RUNS_RULE = (
+    "and that the project's own test command would find and run your new tests (building or loading them is not "
+    "enough): check that with the framework's own means, without running the tests (for example a dry run, or a list "
+    "of the tests it would run)"
+)
 _CHECK_RULE = (
-    "Before you finish, run `{check}` and fix every error it reports; do not run the whole suite. It only proves that "
-    "your files load: also make sure that every file and name you import or call really exists."
+    "Before you finish, run `{check}` and fix every error it reports. Then make sure that every file and name you "
+    f"import or call really exists, {_RUNS_RULE}. Do not run the whole suite."
 )
 _NO_CHECK_RULE = (
     "This project has no quick check: before you finish, read each new file once more and make sure that every file "
-    "and name you import or call really exists. Do not run the whole suite."
-)
-
-
-MOBILE_RULE = (
-    "\n- This is a mobile (Appium) project: reuse its driver and capabilities setup and its screen objects. Locators "
-    "on app screens are accessibility id, resource-id or XPath; 'tap' means a click on the element."
+    f"and name you import or call really exists, {_RUNS_RULE}. Do not run the whole suite."
 )
 
 
@@ -138,15 +140,12 @@ def build_generate_prompt(
     fact_sheet: FactSheetModel,
     findings: AnalyzerFindingsModel | None,
     command: TestCommandModel,
-    placement: str,
     total_cases: int | None = None,
     briefing: str = "",
     instructions: Sequence[str] = (),
 ) -> str:
     """The first message: the project, the first cases, the user's instructions and the rules (`total_cases` when more
     cases follow)."""
-    if "Appium" in _values(fact_sheet.automation_tools):
-        placement += MOBILE_RULE
     total = total_cases or len(cases)
     return _GENERATE_PROMPT.format(
         stack=_stack(fact_sheet),
@@ -158,7 +157,7 @@ def build_generate_prompt(
         batch_note=_BATCH_NOTE.format(last=len(cases), total=total) if total > len(cases) else "",
         cases="\n".join(_case(case) for case in cases),
         user_block=user_instructions_block(instructions),
-        placement=placement,
+        generated_dir=GENERATED_DIR,
         screen_rule=VISIBLE_BROWSER_RULE,
         marker=UNVERIFIED_MARKER,
         check_rule=_CHECK_RULE.format(check=command.check) if command.check else _NO_CHECK_RULE,
@@ -184,6 +183,17 @@ def build_next_batch_prompt(
 def build_fix_prompt(errors: str, check: str, state: str = "") -> str:
     """The check's errors handed back to the generator, with where the work stands."""
     return _FIX_PROMPT.format(check=check, errors=errors, state=f"{state}\n" if state else "")
+
+
+_FINISH_PROMPT = """Before you finish, put the work right where it needs it:
+{state}
+
+Then reply with a short summary of what you changed."""
+
+
+def build_finish_prompt(state: str) -> str:
+    """After the last batch: where the work stands (e.g. a case written twice), for the generator to put right."""
+    return _FINISH_PROMPT.format(state=state)
 
 
 def _case(case: TestCaseSpecModel) -> str:
@@ -242,12 +252,6 @@ def _stack(fact_sheet: FactSheetModel) -> str:
                      fact_sheet.automation_tools, fact_sheet.bdd_tool)
     ]
     return " · ".join(part for part in parts if part) or "unknown"
-
-
-def _values(fact: FactModel) -> list[str]:
-    if fact.value is None:
-        return []
-    return [fact.value] if isinstance(fact.value, str) else list(fact.value)
 
 
 def _text(fact: FactModel) -> str:

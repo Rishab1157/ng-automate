@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 
+from app.models.tokenUsageModel import TokenUsageModel
+
 
 class GuardViolationModel(BaseModel):
     """A risky edit by an agent (it may hide a failure instead of fixing it): kept, and reported for the user."""
@@ -29,3 +31,5 @@ class HealOutcomeModel(BaseModel):
     blocker_rejected: bool = False
     # Time the healer worked, without paused time: counts against the run's healing budget.
     seconds: float = 0.0
+    # Tokens this heal's LLM calls used; None when they could not be read.
+    token_usage: TokenUsageModel | None = None

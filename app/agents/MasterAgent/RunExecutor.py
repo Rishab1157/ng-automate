@@ -44,6 +44,11 @@ RUN_TIMEOUT_MESSAGE = "The run took longer than {seconds} seconds and was stoppe
 RUN_COMPLETED_MESSAGE = "Run completed: the project profile is ready"
 TEST_RUN_COMPLETED_MESSAGE = "Run completed: {summary}"
 GENERATE_RUN_COMPLETED_MESSAGE = "Run completed: the generated tests are saved in the project, ready to review and run"
+GENERATE_RUN_NOT_BUILDING_MESSAGE = (
+    "Run completed: the generated tests are saved in the project, but they do not build yet: review them (a test run "
+    "hands build errors to the healer)"
+)
+TOKEN_USAGE_MESSAGE = "Tokens: {usage}"
 
 _FINISHED_STATUSES = (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED)
 
@@ -224,6 +229,7 @@ class RunExecutor:
             state = initial_state(run)
             async with deadline:
                 final_state = await graph.ainvoke(state)
+            await self._report_token_usage(run)
             await self.run_service.mark_completed(run.id)
             await self._report_completed(run, final_state)
         except asyncio.CancelledError:
@@ -245,21 +251,39 @@ class RunExecutor:
         """The run-completed event: what the run produced, in one line."""
         data: dict[str, Any] = {"profile_id": final_state.get("profile_id")}
         message = RUN_COMPLETED_MESSAGE
-        if final_state.get("generation"):
-            message = GENERATE_RUN_COMPLETED_MESSAGE
+        if generation := final_state.get("generation"):
+            builds = generation.get("builds") if isinstance(generation, dict) else None
+            message = GENERATE_RUN_NOT_BUILDING_MESSAGE if builds is False else GENERATE_RUN_COMPLETED_MESSAGE
         if final_state.get("test_report"):
             report = TestReportModel.model_validate(final_state["test_report"])
             message = TEST_RUN_COMPLETED_MESSAGE.format(summary=describe_test_report(report))
             data["test_report"] = report.model_dump(mode="json")
         await self.run_service.append_event(run.id, run.org_id, RunEventType.RUN_COMPLETED, message, data=data)
 
+    async def _report_token_usage(self, run: RunModel) -> None:
+        """One event with what the run's LLM calls used in all, before the run is marked finished (a client stops
+        reading the timeline then). No event when nothing was counted. Never raises: it must not fail the run."""
+        try:
+            usage = (await self.run_service.get_by_id(run.id)).outputs.token_usage
+            if usage is None:
+                return
+            message = TOKEN_USAGE_MESSAGE.format(usage=usage.total.describe())
+            logger.info("Run %s: %s", run.id, message)
+            await self.run_service.append_event(
+                run.id, run.org_id, RunEventType.TOKEN_USAGE, message, data=usage.model_dump(mode="json")
+            )
+        except Exception:
+            logger.warning("Could not report the token usage of run %s", run.id, exc_info=True)
+
     async def _cancel(self, run: RunModel, reason: str) -> None:
+        await self._report_token_usage(run)
         await self.run_service.mark_cancelled(run.id, reason)
         await self.run_service.append_event(
             run.id, run.org_id, RunEventType.RUN_CANCELLED, reason, data={"code": ErrorCode.RUN_CANCELLED.value}
         )
 
     async def _fail(self, run: RunModel, code: str, message: str) -> None:
+        await self._report_token_usage(run)
         await self.run_service.mark_failed(run.id, code, message)
         await self.run_service.append_event(run.id, run.org_id, RunEventType.RUN_FAILED, message, data={"code": code})
 

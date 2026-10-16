@@ -23,6 +23,8 @@ os.environ.update({
     "DATA_DIR": _TEST_DATA_DIR,
     "SECRET_KEY": "test-secret-key-that-is-at-least-32-bytes-long",
     "LLM_MODEL": "test-model",
+    # The local model unless a test says otherwise (model_connections_only), whatever the developer's .env says.
+    "USE_LOCAL_LLM": "true",
     "MAX_PROJECT_MB": "5",
 })
 
@@ -92,6 +94,12 @@ def client(mongo: MongoClient) -> Iterator[TestClient]:
         mongo[settings.MONGO_DATABASE][name].delete_many({})
     for name in ("git_connections", "model_connections", "model_providers", "model_types"):
         mongo[settings.QXCEL_DATABASE][name].delete_many({})
+
+
+@pytest.fixture
+def model_connections_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """USE_LOCAL_LLM=false: work that needs a model must name one of the org's QXcel model connections."""
+    monkeypatch.setattr(settings, "USE_LOCAL_LLM", False)
 
 
 @pytest.fixture

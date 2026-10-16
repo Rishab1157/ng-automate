@@ -39,6 +39,10 @@ class ErrorMessages:
 
     # Model connections
     MODEL_CONNECTION_NOT_FOUND = "Model connection not found or not enabled for NG Automate in this organization"
+    MODEL_CONNECTION_REQUIRED = (
+        "Choose a model connection for NG Automate: this server uses the organization's model connections only "
+        "(USE_LOCAL_LLM is false), so model_connection_id is required"
+    )
 
     # Runs
     RUN_NOT_FOUND = "Run not found"
@@ -54,6 +58,7 @@ class ErrorMessages:
     TEST_DATA_NOT_READY = "The test data is not ready (status: {status}): wait until it has been read"
     TEST_DATA_RETRY_NOT_ALLOWED = "Only test data that failed to be read can be read again"
     TEST_DATA_READ_FAILED = "The test data could not be turned into test cases: {reason}"
+    TEST_DATA_NOT_TEXT = "This test-data file is not UTF-8 text: download it to see it"
     TEST_DATA_REQUIRED = "A generate run needs test_data_id: upload test data for the project first"
     NO_RUNNABLE_TEST_CASES = "None of the test cases can be generated: none of them has any steps"
 

@@ -20,7 +20,7 @@ BASE = "/tx-agents/ng-automate/run"
 PROJECT_BASE = "/tx-agents/ng-automate/project"
 RUN_FIELDS = {
     "id", "org_id", "project_id", "created_by", "model_connection_id", "mode", "test_selector", "test_files", "test_data_id", "instructions", "status", "stage", "error", "profile_id",
-    "generation", "test_report",
+    "generation", "test_report", "token_usage",
     "created_at", "updated_at", "started_at", "finished_at",
 }
 EVENT_FIELDS = {"seq", "type", "level", "message", "data", "created_at"}
@@ -88,6 +88,7 @@ def test_blank_model_connection_is_stored_as_none(
     assert _db(mongo).runs.find_one({"_id": ObjectId(response.json()["id"])})["model_connection_id"] is None
 
 
+@pytest.mark.usefixtures("model_connections_only")
 def test_enabled_model_connection_is_stored(
     client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
 ) -> None:
@@ -105,6 +106,7 @@ def test_enabled_model_connection_is_stored(
     assert executor.submitted == [body["id"]]
 
 
+@pytest.mark.usefixtures("model_connections_only")
 def test_model_connection_is_read_from_the_query_never_a_header(
     client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
 ) -> None:
@@ -112,10 +114,36 @@ def test_model_connection_is_read_from_the_query_never_a_header(
 
     response = _create_run(client, headers, seed_project(mongo, org_id))
 
+    assert response.status_code == 400
+    assert _error(response)["code"] == "MODEL_CONNECTION_REQUIRED"
+    assert executor.submitted == []
+
+
+@pytest.mark.usefixtures("model_connections_only")
+def test_without_the_local_model_a_run_needs_a_model_connection(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    response = _create_run(client, auth_headers(org_id), seed_project(mongo, org_id), "?model_connection_id=undefined")
+
+    assert response.status_code == 400
+    assert _error(response)["code"] == "MODEL_CONNECTION_REQUIRED"
+    assert executor.submitted == []
+    assert _db(mongo).runs.count_documents({}) == 0
+
+
+def test_with_the_local_model_a_chosen_model_connection_is_ignored(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    connection_id = seed_model_connection(mongo, org_id)
+
+    response = _create_run(client, auth_headers(org_id), seed_project(mongo, org_id), f"?model_connection_id={connection_id}")
+
     assert response.status_code == 202
     assert response.json()["model_connection_id"] is None
+    assert executor.submitted == [response.json()["id"]]
 
 
+@pytest.mark.usefixtures("model_connections_only")
 def test_model_connection_of_another_org_is_not_found(
     client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
 ) -> None:
@@ -129,6 +157,7 @@ def test_model_connection_of_another_org_is_not_found(
     assert _db(mongo).runs.count_documents({}) == 0
 
 
+@pytest.mark.usefixtures("model_connections_only")
 def test_malformed_model_connection_id_is_rejected(
     client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
 ) -> None:

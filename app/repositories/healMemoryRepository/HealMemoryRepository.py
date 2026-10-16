@@ -1,7 +1,8 @@
-"""Healing memories in Qdrant: one collection, one point per heal, every search scoped to one organization.
+"""Healing memories in Qdrant: one collection, one point per heal, every search scoped to one organization's project.
 
 The collection is made for many tenants the way Qdrant recommends: org_id is a tenant index and the HNSW graph is
-built per organization (payload_m), not across all of them (m=0). A search without an organization is refused.
+built per organization (payload_m), not across all of them (m=0). A search without an organization or a project is
+refused: another project's fixes are not relevant to this one (the user's rule).
 """
 
 import logging
@@ -16,7 +17,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 TENANT_FIELD = "org_id"
-KEYWORD_FIELDS = ("run_id", "embedding_model")
+PROJECT_FIELD = "project_id"
+KEYWORD_FIELDS = (PROJECT_FIELD, "run_id", "embedding_model")
 PAYLOAD_M = 16
 
 
@@ -47,6 +49,12 @@ class HealMemoryRepository:
                     f"Qdrant collection {self.collection_name!r} holds vectors of size {size}, the embedding model "
                     f"makes {vector_size}: use another QDRANT_COLLECTION_NAME for this model"
                 )
+            # A collection made before an index was added (project_id) gets it now.
+            for field in KEYWORD_FIELDS:
+                if field not in (info.payload_schema or {}):
+                    await self.client.create_payload_index(
+                        self.collection_name, field, field_schema=models.PayloadSchemaType.KEYWORD
+                    )
         else:
             try:
                 await self.client.create_collection(
@@ -82,19 +90,24 @@ class HealMemoryRepository:
         self,
         *,
         org_id: str,
+        project_id: str,
         vector: list[float],
         embedding_model: str,
         limit: int,
         min_score: float,
         exclude_run_id: str | None = None,
     ) -> list[tuple[str, dict[str, Any], float]]:
-        """(point id, payload, similarity) of the organization's most similar memories, best first."""
+        """(point id, payload, similarity) of the project's most similar memories, best first. A memory without a
+        project_id never matches."""
         from qdrant_client import models
 
         if not org_id:
             raise ValueError("A memory search needs an org_id: memories are never searched across organizations")
+        if not project_id:
+            raise ValueError("A memory search needs a project_id: memories are never searched across projects")
         must = [
             models.FieldCondition(key=TENANT_FIELD, match=models.MatchValue(value=org_id)),
+            models.FieldCondition(key=PROJECT_FIELD, match=models.MatchValue(value=project_id)),
             models.FieldCondition(key="embedding_model", match=models.MatchValue(value=embedding_model)),
         ]
         must_not = (

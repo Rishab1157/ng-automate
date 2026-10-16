@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app.models.runModel import RunMode, RunModel, RunStage, RunStatus, TestReportModel
+from app.models.runModel import RunMode, RunModel, RunStage, RunStatus, RunTokenUsageModel, TestReportModel
 from app.models.testGeneratorModel import GenerationOutcomeModel
 
 
@@ -33,6 +33,8 @@ class RunResponseDTO(BaseModel):
     generation: GenerationOutcomeModel | None = None
     # Test and generate modes: the outcome once the tests ran. Details per attempt: GET /run/{id}/tests.
     test_report: TestReportModel | None = None
+    # Tokens the run's LLM calls used (per stage and in all) and their estimated cost; None before any was counted.
+    token_usage: RunTokenUsageModel | None = None
     created_at: datetime
     updated_at: datetime
     started_at: datetime | None = None
@@ -57,6 +59,7 @@ class RunResponseDTO(BaseModel):
             profile_id=run.outputs.profile_id,
             generation=run.outputs.generation,
             test_report=run.outputs.test_report,
+            token_usage=run.outputs.token_usage,
             created_at=run.created_at,
             updated_at=run.updated_at,
             started_at=run.started_at,

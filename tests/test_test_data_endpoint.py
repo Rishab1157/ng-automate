@@ -11,7 +11,7 @@ from pymongo import MongoClient
 from app.config import settings
 from app.core.exceptions import ErrorMessages
 from app.utils.TestDataParser import MAX_TEST_DATA_BYTES
-from tests.test_run_service import seed_project
+from tests.test_run_service import seed_model_connection, seed_project
 
 BASE = "/tx-agents/ng-automate/project"
 AuthHeaders = Callable[..., dict[str, str]]
@@ -128,9 +128,11 @@ def test_test_data_endpoints_need_a_token(client: TestClient) -> None:
         client.post(f"{BASE}/{project_id}/test-data", files={"file": ("a.json", b"[]", "application/json")}),
         client.get(f"{BASE}/{project_id}/test-data"),
         client.get(f"{BASE}/{project_id}/test-data/{ObjectId()}"),
+        client.get(f"{BASE}/{project_id}/test-data/{ObjectId()}/content"),
+        client.put(f"{BASE}/{project_id}/test-data/{ObjectId()}/content", json={"content": "[]"}),
     ]
 
-    assert [r.status_code for r in responses] == [401, 401, 401]
+    assert [r.status_code for r in responses] == [401, 401, 401, 401, 401]
 
 
 class FakeProcessor:
@@ -211,3 +213,146 @@ def test_processing_source_cannot_be_edited_and_only_failed_ones_are_retried(
     assert early_retry.status_code == 400
     assert retry.status_code == 202 and retry.json()["status"] == "processing"
     assert processor.submitted == [test_data_id, test_data_id]
+
+
+# ---------- the editor: a test-data file's text, saved and read again ----------
+
+def _content(client: TestClient, headers: dict[str, str], project_id: str, test_data_id: str):
+    return client.get(f"{BASE}/{project_id}/test-data/{test_data_id}/content", headers=headers)
+
+
+def _save(client: TestClient, headers: dict[str, str], project_id: str, test_data_id: str, text: str):
+    return client.put(f"{BASE}/{project_id}/test-data/{test_data_id}/content", headers=headers, json={"content": text})
+
+
+def test_the_editor_gets_the_file_as_it_was_uploaded(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers, project_id = auth_headers(org_id), seed_project(mongo, org_id)
+    text = json.dumps({"source": "txgenie", "test_cases": CASES}, indent=2)
+    test_data_id = _upload(client, headers, project_id, text.encode()).json()["id"]
+
+    response = _content(client, headers, project_id, test_data_id)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "test_data_id": test_data_id, "filename": "cases.json", "content": text, "editable": True,
+        "size_bytes": len(text.encode()), "reason": None,
+    }
+
+
+def test_saving_our_format_replaces_the_file_and_its_cases_at_once(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str, processor: FakeProcessor
+) -> None:
+    headers, project_id = auth_headers(org_id), seed_project(mongo, org_id)
+    test_data_id = _upload(client, headers, project_id, json.dumps(CASES).encode()).json()["id"]
+    edited = json.dumps([CASES[0]], indent=2)
+
+    response = _save(client, headers, project_id, test_data_id, edited)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["status"], body["case_count"], body["warnings"], body["filename"]) == ("ready", 1, [], "cases.json")
+    assert _content(client, headers, project_id, test_data_id).json()["content"] == edited
+    doc = mongo[settings.MONGO_DATABASE].test_data.find_one({"_id": ObjectId(test_data_id)})
+    assert doc["revision"] == 1 and doc["raw_source"] is None
+    assert processor.submitted == []
+
+
+def test_saved_free_text_is_read_again_in_the_background(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str, processor: FakeProcessor
+) -> None:
+    headers, project_id = auth_headers(org_id), seed_project(mongo, org_id)
+    test_data_id = _upload(client, headers, project_id, json.dumps(CASES).encode()).json()["id"]
+    export = json.dumps({"suite": {"tests": [{"name": "Valid login", "steps": "open the shop and log in"}]}})
+
+    response = _save(client, headers, project_id, test_data_id, export)
+
+    assert response.status_code == 202
+    assert (response.json()["status"], response.json()["case_count"], response.json()["cases"]) == ("processing", 0, [])
+    assert processor.submitted == [test_data_id]
+    doc = mongo[settings.MONGO_DATABASE].test_data.find_one({"_id": ObjectId(test_data_id)})
+    assert doc["raw_source"] == json.dumps(json.loads(export), indent=2) and doc["data_set"] is None
+
+
+def test_invalid_text_is_rejected_and_nothing_changes(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers, project_id = auth_headers(org_id), seed_project(mongo, org_id)
+    original = json.dumps(CASES)
+    test_data_id = _upload(client, headers, project_id, original.encode()).json()["id"]
+
+    responses = [_save(client, headers, project_id, test_data_id, text) for text in ("   ", "[]")]
+
+    assert [r.status_code for r in responses] == [400, 400]
+    assert _content(client, headers, project_id, test_data_id).json()["content"] == original
+    doc = mongo[settings.MONGO_DATABASE].test_data.find_one({"_id": ObjectId(test_data_id)})
+    assert doc["case_count"] == 2 and doc.get("revision", 0) == 0
+
+
+def test_the_file_cannot_be_saved_while_a_run_uses_the_project(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers, project_id = auth_headers(org_id), seed_project(mongo, org_id)
+    original = json.dumps(CASES)
+    test_data_id = _upload(client, headers, project_id, original.encode()).json()["id"]
+    mongo[settings.MONGO_DATABASE].runs.insert_one(
+        {"project_id": ObjectId(project_id), "org_id": ObjectId(org_id), "status": "running"}
+    )
+
+    response = _save(client, headers, project_id, test_data_id, json.dumps([CASES[0]]))
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "PROJECT_BUSY"
+    assert _content(client, headers, project_id, test_data_id).json()["content"] == original
+
+
+def test_a_file_too_large_to_edit_comes_without_its_text(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers, project_id = auth_headers(org_id), seed_project(mongo, org_id)
+    test_data_id = _upload(client, headers, project_id, json.dumps(CASES).encode()).json()["id"]
+    stored = settings.DATA_DIR / "projects" / project_id / "test-data" / "cases.json"
+    stored.write_bytes(b" " * (1024 * 1024 + 1))
+
+    body = _content(client, headers, project_id, test_data_id).json()
+
+    assert (body["content"], body["editable"], body["size_bytes"]) == (None, False, 1024 * 1024 + 1)
+    assert "too large" in body["reason"]
+
+
+@pytest.mark.usefixtures("model_connections_only")
+def test_without_the_local_model_free_text_needs_a_model_connection_and_our_format_does_not(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str, processor: FakeProcessor
+) -> None:
+    headers, project_id = auth_headers(org_id), seed_project(mongo, org_id)
+
+    text = _upload(client, headers, project_id, TEXT_SOURCE, "a.txt")
+    ours = _upload(client, headers, project_id, json.dumps(CASES).encode())
+    as_text = _save(client, headers, project_id, ours.json()["id"], json.dumps({"suite": "login"}))
+
+    assert text.status_code == 400 and text.json()["error"]["code"] == "MODEL_CONNECTION_REQUIRED"
+    assert ours.status_code == 201
+    assert as_text.status_code == 400 and as_text.json()["error"]["code"] == "MODEL_CONNECTION_REQUIRED"
+    assert processor.submitted == []
+
+
+@pytest.mark.usefixtures("model_connections_only")
+def test_a_retry_can_use_another_model_connection(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str, processor: FakeProcessor
+) -> None:
+    headers, project_id = auth_headers(org_id), seed_project(mongo, org_id)
+    first, second = seed_model_connection(mongo, org_id), seed_model_connection(mongo, org_id)
+    upload = client.post(
+        f"{BASE}/{project_id}/test-data?model_connection_id={first}",
+        headers=headers,
+        files={"file": ("a.txt", TEXT_SOURCE, "text/plain")},
+    )
+    test_data_id = upload.json()["id"]
+    mongo[settings.MONGO_DATABASE].test_data.update_one({"_id": ObjectId(test_data_id)}, {"$set": {"status": "failed"}})
+
+    retry = client.post(f"{BASE}/{project_id}/test-data/{test_data_id}/retry?model_connection_id={second}", headers=headers)
+
+    assert upload.status_code == 202 and retry.status_code == 202
+    doc = mongo[settings.MONGO_DATABASE].test_data.find_one({"_id": ObjectId(test_data_id)})
+    assert doc["model_connection_id"] == ObjectId(second)

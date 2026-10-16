@@ -69,7 +69,9 @@ project_file_service = ProjectFileService(run_service=run_service)
 async def create_run(
     dto: CreateRunDTO,
     model_connection_id: str | None = Query(
-        None, description="QXcel model connection enabled for NG Automate. Leave empty to use the default model."
+        None,
+        description="QXcel model connection enabled for NG Automate. Ignored when the server uses its local model "
+        "(USE_LOCAL_LLM); required otherwise.",
     ),
     org_id: str = Depends(resolve_org_id),
     current_user: CurrentUserModel = Depends(get_current_user),

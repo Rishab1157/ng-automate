@@ -18,6 +18,7 @@ from app.agents.TestGeneratorAgent.TestCaseExtractor import (
 )
 from app.models.llmModel import LlmConfigModel
 from app.models.testDataModel import TestDataFormat
+from app.models.tokenUsageModel import TokenUsageModel
 
 TEXT = """# Login feature - manual test cases
 
@@ -59,8 +60,10 @@ class FakeComplete:
         self.calls: list[dict[str, Any]] = []
 
     def __call__(self, llm_config: Any, instructions: str, text: str, schema_name: str, schema: dict[str, Any],
-                 parse: Any, timeout_seconds: int = 0) -> Any:
+                 parse: Any, timeout_seconds: int = 0, on_usage: Any = None) -> Any:
         self.calls.append({"text": text, "schema": schema, "timeout": timeout_seconds})
+        if on_usage is not None:
+            on_usage(TokenUsageModel(input_tokens=100, output_tokens=10, calls=1))
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):
             raise reply

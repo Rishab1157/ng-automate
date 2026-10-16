@@ -242,6 +242,7 @@ async def test_blank_model_connection_is_stored_as_none(app_db: MongoClient, org
     assert _runs(app_db).find_one({"_id": ObjectId(run.id)})["model_connection_id"] is None
 
 
+@pytest.mark.usefixtures("model_connections_only")
 @pytest.mark.anyio
 async def test_enabled_model_connection_is_stored_by_id_only(app_db: MongoClient, org_id: str) -> None:
     connection_id = seed_model_connection(app_db, org_id, api_key="sk-very-secret")
@@ -256,6 +257,7 @@ async def test_enabled_model_connection_is_stored_by_id_only(app_db: MongoClient
     assert "sk-very-secret" not in str(doc)
 
 
+@pytest.mark.usefixtures("model_connections_only")
 @pytest.mark.anyio
 async def test_model_connection_of_another_org_is_not_found(app_db: MongoClient, org_id: str) -> None:
     connection_id = seed_model_connection(app_db, str(ObjectId()))
@@ -268,6 +270,7 @@ async def test_model_connection_of_another_org_is_not_found(app_db: MongoClient,
     assert _runs(app_db).count_documents({}) == 0
 
 
+@pytest.mark.usefixtures("model_connections_only")
 @pytest.mark.anyio
 async def test_malformed_model_connection_is_rejected(app_db: MongoClient, org_id: str) -> None:
     with pytest.raises(ValidationError):

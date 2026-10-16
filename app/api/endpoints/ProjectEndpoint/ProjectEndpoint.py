@@ -13,7 +13,13 @@ from app.dto.projectDto import (
     SaveProjectFileDTO,
 )
 from app.dto.projectProfileDto import ProjectProfileResponseDTO
-from app.dto.testDataDto import TestDataResponseDTO, TestDataSummaryResponseDTO, UpdateTestDataCasesDTO
+from app.dto.testDataDto import (
+    SaveTestDataContentDTO,
+    TestDataContentResponseDTO,
+    TestDataResponseDTO,
+    TestDataSummaryResponseDTO,
+    UpdateTestDataCasesDTO,
+)
 from app.models.authModel import CurrentUserModel
 from app.models.projectFileModel import ProjectFileRoot
 from app.models.testDataModel import TestDataStatus
@@ -25,6 +31,10 @@ from app.utils.TestDataParser import MAX_TEST_DATA_BYTES
 
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 PROJECT_DELETED = "Project deleted successfully"
+MODEL_CONNECTION_QUERY = (
+    "QXcel model connection (enabled for NG Automate) that reads a free-form source. Ignored when the server uses its "
+    "local model (USE_LOCAL_LLM); required otherwise."
+)
 
 router = APIRouter(
     prefix="/tx-agents/ng-automate/project",
@@ -130,9 +140,7 @@ async def upload_test_data(
     project_id: str,
     response: Response,
     file: UploadFile = File(description="Test cases (.json, .csv) or a free-form source (.json, .txt, .md)"),
-    model_connection_id: str | None = Query(
-        None, description="Model that reads a free-form source. Leave empty to use the default model."
-    ),
+    model_connection_id: str | None = Query(None, description=MODEL_CONNECTION_QUERY),
     org_id: str = Depends(resolve_org_id),
     current_user: CurrentUserModel = Depends(get_current_user),
 ) -> TestDataResponseDTO:
@@ -185,14 +193,53 @@ async def update_test_data_cases(
     return TestDataResponseDTO.from_model(await test_data_service.update_cases(test_data_id, project_id, org_id, dto.cases))
 
 
+@router.get(
+    "/{project_id}/test-data/{test_data_id}/content",
+    response_model=TestDataContentResponseDTO,
+    summary="Read a test-data file's text as it is stored, for the editor (content is null when the file is too large "
+    "or not text).",
+)
+async def get_test_data_content(
+    project_id: str, test_data_id: str, org_id: str = Depends(resolve_org_id)
+) -> TestDataContentResponseDTO:
+    return TestDataContentResponseDTO.from_model(await test_data_service.read_content(test_data_id, project_id, org_id))
+
+
+@router.put(
+    "/{project_id}/test-data/{test_data_id}/content",
+    response_model=TestDataResponseDTO,
+    summary="Save a test-data file's new text from the editor and read it again: our own JSON/CSV test-case format is "
+    "ready at once (200); anything else is read by an LLM in the background (202, status processing: poll it). "
+    "Invalid text is rejected (400) and nothing changes; 409 while a run uses the project.",
+)
+async def save_test_data_content(
+    project_id: str,
+    test_data_id: str,
+    dto: SaveTestDataContentDTO,
+    response: Response,
+    model_connection_id: str | None = Query(None, description=MODEL_CONNECTION_QUERY),
+    org_id: str = Depends(resolve_org_id),
+) -> TestDataResponseDTO:
+    upload = await test_data_service.replace_content(test_data_id, project_id, org_id, dto.content, model_connection_id)
+    if upload.status == TestDataStatus.PROCESSING:
+        await test_data_processor.submit(upload.id)
+        response.status_code = status.HTTP_202_ACCEPTED
+    return TestDataResponseDTO.from_model(upload)
+
+
 @router.post(
     "/{project_id}/test-data/{test_data_id}/retry",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=TestDataResponseDTO,
     summary="Read a free-form source again after it failed.",
 )
-async def retry_test_data(project_id: str, test_data_id: str, org_id: str = Depends(resolve_org_id)) -> TestDataResponseDTO:
-    upload = await test_data_service.retry(test_data_id, project_id, org_id)
+async def retry_test_data(
+    project_id: str,
+    test_data_id: str,
+    model_connection_id: str | None = Query(None, description=MODEL_CONNECTION_QUERY),
+    org_id: str = Depends(resolve_org_id),
+) -> TestDataResponseDTO:
+    upload = await test_data_service.retry(test_data_id, project_id, org_id, model_connection_id)
     await test_data_processor.submit(upload.id)
     return TestDataResponseDTO.from_model(upload)
 

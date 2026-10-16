@@ -167,6 +167,16 @@ def _txgenie_cases(data: Any) -> TestDataSetModel | None:
     return TestDataSetModel(source_format=TestDataFormat.JSON, cases=cases, warnings=[])
 
 
+# TX Genie writes an element's locator at the end of a step's action: "Click Login (locator: #login-button)".
+_TXGENIE_LOCATOR = re.compile(r"\(locator:\s*(?P<locator>.+)\)\s*$", re.IGNORECASE)
+
+
+def _txgenie_locator(step: dict[str, Any]) -> str | None:
+    """The step's locator: a `locator` field, or the one at the end of its action."""
+    match = _TXGENIE_LOCATOR.search(_text(step.get("action")))
+    return _text(step.get("locator")) or (match["locator"].strip() if match else None)
+
+
 def _txgenie_case(raw: dict[str, Any], index: int) -> TestCaseSpecModel:
     case_id = _text(raw.get("id")) or f"TC-{index}"
     raw_steps = [step for step in raw.get("steps") or [] if isinstance(step, dict) and _text(step.get("action"))]
@@ -178,6 +188,7 @@ def _txgenie_case(raw: dict[str, Any], index: int) -> TestCaseSpecModel:
     steps = [
         TestStepModel(
             action=_text(step.get("action")),
+            target=_txgenie_locator(step),
             value=_free_text(step.get("test_data")) or None,
             expected=_free_text(step.get("expected_result")) or None,
             text=_text(step.get("action")),

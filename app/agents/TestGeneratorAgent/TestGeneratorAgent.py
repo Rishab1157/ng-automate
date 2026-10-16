@@ -29,13 +29,13 @@ from app.agents.HealerAgent.HealerGuards import check_changes
 from app.services.sandboxService.SandboxService import SANDBOX_PROJECT_DIR
 from app.agents.TestGeneratorAgent.GeneratedTestPlacement import (
     GENERATED_DIR,
-    placement_rule,
     runnable_cases,
     unverified_locators,
 )
 from app.agents.TestGeneratorAgent.GenerationState import collect_state, describe_state
 from app.agents.TestGeneratorAgent.ProjectTestBriefing import project_test_briefing
 from app.agents.TestGeneratorAgent.TestGeneratorPrompts import (
+    build_finish_prompt,
     build_fix_prompt,
     build_generate_prompt,
     build_next_batch_prompt,
@@ -81,7 +81,8 @@ STILL_BROKEN_NOTICE = "The tests still do not build after {total} fixes: the tes
 NOT_CHECKED_NOTICE = (
     "The project does not build before any test is added, so the generated tests cannot be checked by building them"
 )
-DUPLICATES_NOTICE = "Some test cases are in more than one generated file ({cases}): the generator is asked to keep one"
+NOT_BUILDING_SUMMARY = "The build check still failed at the end: the generated tests do not build yet."
+DUPLICATES_NOTICE ="Some test cases are in more than one generated file ({cases}): the generator is asked to keep one"
 MAX_BUILD_ERROR_LINES = 40
 MAX_BUILD_ERROR_CHARS = 4000
 # Lines kept after each line that names an error: the file and line, or the cause, usually follow it (a Node "Cannot
@@ -193,7 +194,7 @@ class TestGeneratorAgent:
                     ))
                 prompt = (
                     build_generate_prompt(
-                        batch, fact_sheet, findings, command, placement_rule(fact_sheet), len(cases), briefing, given
+                        batch, fact_sheet, findings, command, len(cases), briefing, given
                     )
                     if done == 0
                     else build_next_batch_prompt(
@@ -211,10 +212,23 @@ class TestGeneratorAgent:
                         last_check,
                     )
                 done += len(batch)
+            # Each batch's message shows how the earlier ones ended; nothing follows the last one. A case written twice
+            # in it (the condenser can drop the agent's memory of its own files) goes back to the agent once more.
+            ids = [case.id for case in cases]
+            if done and not (control is not None and control.is_stopped) and collect_state(
+                snapshot.root, snapshot.changes(), ids, ids[:done]
+            ).duplicates:
+                answers.append(
+                    self._write_batch(conversation, build_finish_prompt(state(done)), snapshot.root, forwarder, control)
+                )
+                if checked:
+                    builds = self._fix_build(
+                        conversation, workspace, command, forwarder, control, lambda: state(done), last_check
+                    )
         except GenerationError as failure:
             error = failure.message
         finally:
-            close_conversation(conversation)
+            token_usage = close_conversation(conversation, self.llm_config.model)
             if not had_git_dir:
                 shutil.rmtree(snapshot.root / GIT_DIR, ignore_errors=True)
 
@@ -233,6 +247,9 @@ class TestGeneratorAgent:
         logger.info("Generator wrote %d file(s) for %d of %d case(s), %d to review", len(changes), done, len(cases), len(flagged))
         skipped += [(case.id, NOT_REACHED) for case in cases[done:]]
         summary = "\n\n".join(answer.strip() for answer in answers if answer.strip())
+        if builds is False:
+            # The agent's own words may say otherwise: the check's result comes first.
+            summary = f"{NOT_BUILDING_SUMMARY}\n\n{summary}" if summary else NOT_BUILDING_SUMMARY
         return GenerationOutcomeModel(
             summary=(summary or NO_SUMMARY)[:MAX_SUMMARY_CHARS],
             files=changes,
@@ -242,6 +259,7 @@ class TestGeneratorAgent:
             unverified_locators=unverified_locators(snapshot.root, changes),
             builds=builds,
             error=error,
+            token_usage=token_usage,
         )
 
     def _write_batch(

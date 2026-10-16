@@ -1,5 +1,6 @@
 """Build the LLM an OpenHands agent talks to."""
 
+import os
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -64,6 +65,10 @@ def sandbox_base_url(base_url: str | None) -> str | None:
 def build_llm(config: LlmConfigModel) -> "LLM":
     from openhands.sdk import LLM
 
+    if config.model.startswith("ollama") and config.base_url:
+        # The SDK looks up an Ollama model's info on the host without its base URL, so LiteLLM asks localhost:11434
+        # (waiting up to 100 minutes when something there never answers). Point that lookup at the model's server.
+        os.environ.setdefault("OLLAMA_API_BASE", config.base_url)
     options: dict[str, Any] = {}
     if config.num_ctx:
         # Ollama's own options; its length limit goes here too, as these options replace the ones LiteLLM would send.

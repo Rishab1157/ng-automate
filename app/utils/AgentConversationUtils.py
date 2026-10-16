@@ -4,7 +4,7 @@
 - AgentControl: lets the user steer the agent that is working (messages, pause, resume, stop). Thread-safe.
 - ask(): send one message, let the agent work within a deadline, return its final answer; waits while paused, and
   says in the timeline when the agent makes no progress (waiting for the model, or a long command).
-- close_conversation(), build_condenser(), secret_values().
+- close_conversation() (returns the conversation's token usage), build_condenser(), secret_values().
 """
 
 import logging
@@ -33,7 +33,9 @@ from app.agents.AnalyzerAgent.AgentEventMapper import (
 from app.core.exceptions import NgAutomateException
 from app.models.llmModel import LlmConfigModel
 from app.models.runModel import RunEventLevel, RunEventType
+from app.models.tokenUsageModel import TokenUsageModel
 from app.utils.AgentControl import AgentControl
+from app.utils.TokenCost import priced
 
 logger = logging.getLogger(__name__)
 
@@ -237,11 +239,56 @@ def _status(conversation: BaseConversation) -> str | None:
     return getattr(status, "value", status)
 
 
-def close_conversation(conversation: BaseConversation) -> None:
+def close_conversation(conversation: BaseConversation, model: str) -> TokenUsageModel | None:
+    """Close the conversation; what its LLM calls used (read just before, priced for `model`), or None when that could
+    not be read."""
+    usage = read_token_usage(conversation, model)
     try:
         conversation.close()
     except Exception:
         logger.warning("Could not close the agent conversation", exc_info=True)
+    return usage
+
+
+def read_token_usage(conversation: BaseConversation, model: str) -> TokenUsageModel | None:
+    """What the conversation's LLM calls used (the agent and its condenser), priced call by call for `model`, or None.
+    Never raises: a failure to read the numbers must not fail the agent.
+
+    A remote conversation is refreshed first: its cached state can miss the last calls, and holds only totals (priced
+    as one call then, which can overestimate a model that costs more above a prompt size).
+    """
+    refresh = getattr(getattr(conversation, "state", None), "refresh_from_server", None)
+    if refresh is not None:
+        try:
+            refresh()
+        except Exception:
+            logger.info("Could not refresh the agent's state; its token counts may miss the last calls", exc_info=True)
+    try:
+        stats = getattr(conversation, "conversation_stats", None)
+        if stats is None:
+            return None
+        metrics = stats.get_combined_metrics()
+        if not metrics.token_usages:
+            total = metrics.accumulated_token_usage
+            return priced(_sdk_usage(total), model) if total is not None else TokenUsageModel()
+        usage = TokenUsageModel()
+        for call in metrics.token_usages:
+            usage = usage.add(priced(_sdk_usage(call, calls=1), model))
+        return usage
+    except Exception:
+        logger.warning("Could not read the agent's token usage; going on without it", exc_info=True)
+        return None
+
+
+def _sdk_usage(usage: Any, calls: int | None = None) -> TokenUsageModel:
+    return TokenUsageModel(
+        input_tokens=usage.prompt_tokens,
+        cached_input_tokens=usage.cache_read_tokens,
+        cache_write_tokens=usage.cache_write_tokens,
+        output_tokens=usage.completion_tokens,
+        reasoning_tokens=usage.reasoning_tokens,
+        calls=calls,
+    )
 
 
 def build_condenser(llm: LLM, num_ctx: int | None) -> LLMSummarizingCondenser:

@@ -126,9 +126,12 @@ class FakeMemory:
     memories: list[HealMemoryModel] = field(default_factory=list)
     recalls: list[dict[str, Any]] = field(default_factory=list)
     remembered: list[tuple[str, HealMemoryDbModel]] = field(default_factory=list)
+    problem: str | None = None  # why memory does not work (e.g. the embedding server does not answer)
 
-    async def recall(self, *, org_id: str, run_id: str, result: TestRunResultModel) -> list[HealMemoryModel]:
-        self.recalls.append({"org_id": org_id, "run_id": run_id, "result": result})
+    async def recall(
+        self, *, org_id: str, project_id: str, run_id: str, result: TestRunResultModel
+    ) -> list[HealMemoryModel]:
+        self.recalls.append({"org_id": org_id, "project_id": project_id, "run_id": run_id, "result": result})
         return list(self.memories)
 
     async def remember(self, point_id: str, memory: HealMemoryDbModel) -> bool:
@@ -582,6 +585,17 @@ EARLIER_HEAL = HealMemoryModel(
 
 
 @pytest.mark.anyio
+async def test_a_heal_without_memory_says_why_in_the_timeline(tmp_path: Path) -> None:
+    setup = _setup(tmp_path, [DEPENDENCY, PASSED], [FIX])
+    setup.memory.problem = "Healer memory is not working: the embedding server http://embed:11434 gave no vector"
+
+    await setup.nodes.test_and_heal(_test_state(tmp_path))
+
+    assert [e.message for e in setup.runs.events].count(setup.memory.problem) == 1
+    assert setup.healer.calls[0]["memories"] == []
+
+
+@pytest.mark.anyio
 async def test_the_healer_gets_similar_earlier_heals_and_the_heal_is_remembered(tmp_path: Path) -> None:
     setup = _setup(tmp_path, [DEPENDENCY, PASSED], [FIX], memories=[EARLIER_HEAL])
     state = _test_state(tmp_path)
@@ -589,7 +603,9 @@ async def test_the_healer_gets_similar_earlier_heals_and_the_heal_is_remembered(
     await setup.nodes.test_and_heal(state)
 
     [recall] = setup.memory.recalls
-    assert (recall["org_id"], recall["run_id"], recall["result"]) == (state["org_id"], state["run_id"], DEPENDENCY)
+    assert (recall["org_id"], recall["project_id"], recall["run_id"], recall["result"]) == (
+        state["org_id"], state["project_id"], state["run_id"], DEPENDENCY
+    )
     assert setup.healer.calls[0]["memories"] == [EARLIER_HEAL]
     event = next(e for e in setup.runs.events if e.message.startswith("The healer got"))
     assert event.message == "The healer got 1 similar earlier heal as context (1 worked, 0 did not)"

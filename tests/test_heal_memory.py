@@ -7,6 +7,7 @@ bag-of-words vectors: texts that share words are similar, like real embeddings. 
 
 import hashlib
 import json
+import logging
 import math
 import re
 from collections.abc import AsyncIterator
@@ -45,6 +46,7 @@ from app.utils.EmbeddingClient import OllamaEmbeddings
 pytestmark = pytest.mark.filterwarnings("ignore:Payload indexes have no effect:UserWarning")
 
 ORG_A, ORG_B, ORG_C = "6a0d959bdc11660be6b2ae63", "6a0d959bdc11660be6b2ae64", "6a0d959bdc11660be6b2ae65"
+PROJECT, OTHER_PROJECT = "6a0d959bdc11660be6b2ae70", "6a0d959bdc11660be6b2ae71"
 STACK = "Java · Maven · TestNG · Selenium"
 COMMAND = TestCommandModel(tool="maven", command="mvn -B -ntp test", report_globs=["target/surefire-reports/TEST-*.xml"])
 
@@ -153,11 +155,11 @@ def memory(qdrant: AsyncQdrantClient, embeddings: FakeEmbeddings) -> HealMemoryS
 
 def _memory(org_id: str, run_id: str, failure: TestRunResultModel = MAVEN_TESTNG,
             after: TestRunResultModel | None = PASSED, heal: HealOutcomeModel = FIX,
-            embedding_model: str | None = None) -> tuple[str, HealMemoryDbModel]:
+            embedding_model: str | None = None, project_id: str = PROJECT) -> tuple[str, HealMemoryDbModel]:
     attempt = TestAttemptModel(number=1, result=failure, heal=heal)
     next_attempt = TestAttemptModel(number=2, result=after) if after is not None else None
     memory = HealMemoryMapper.to_db_model(
-        org_id=org_id, project_id="6a0d959bdc11660be6b2ae70", run_id=run_id, attempt=attempt, next_attempt=next_attempt,
+        org_id=org_id, project_id=project_id, run_id=run_id, attempt=attempt, next_attempt=next_attempt,
         result=judge_heal(attempt, next_attempt), stack=STACK, test_command=COMMAND.command,
         embedding_model=embedding_model or settings.EMBEDDING_MODEL,
     )
@@ -234,7 +236,7 @@ def test_the_stored_payload_reads_back_as_the_same_memory() -> None:
 async def test_a_saved_heal_is_found_for_a_similar_problem(memory: HealMemoryService) -> None:
     assert await memory.remember(*_memory(ORG_A, "run-1"))
 
-    [found] = await memory.recall(org_id=ORG_A, run_id="run-2", result=MAVEN_SELENIUM)
+    [found] = await memory.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-2", result=MAVEN_SELENIUM)
 
     assert found.result == HealMemoryResult.FIXED and found.succeeded
     assert found.fix_summary == FIX.summary and found.changed_files == ["pom.xml"]
@@ -245,7 +247,7 @@ async def test_a_saved_heal_is_found_for_a_similar_problem(memory: HealMemorySer
 async def test_an_unrelated_problem_finds_nothing(memory: HealMemoryService) -> None:
     await memory.remember(*_memory(ORG_A, "run-1"))
 
-    assert await memory.recall(org_id=ORG_A, run_id="run-2", result=CHROMEDRIVER) == []
+    assert await memory.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-2", result=CHROMEDRIVER) == []
 
 
 @pytest.mark.anyio
@@ -253,11 +255,33 @@ async def test_memories_never_cross_organizations(memory: HealMemoryService) -> 
     await memory.remember(*_memory(ORG_A, "run-a"))
     await memory.remember(*_memory(ORG_B, "run-b"))
 
-    found_by_a = await memory.recall(org_id=ORG_A, run_id="run-x", result=MAVEN_TESTNG)
-    found_by_c = await memory.recall(org_id=ORG_C, run_id="run-x", result=MAVEN_TESTNG)
+    found_by_a = await memory.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-x", result=MAVEN_TESTNG)
+    found_by_c = await memory.recall(project_id=PROJECT, org_id=ORG_C, run_id="run-x", result=MAVEN_TESTNG)
 
     assert [(m.org_id, m.run_id) for m in found_by_a] == [(ORG_A, "run-a")]
     assert found_by_c == []
+
+
+@pytest.mark.anyio
+async def test_memories_never_cross_projects(memory: HealMemoryService, qdrant: AsyncQdrantClient) -> None:
+    await memory.remember(*_memory(ORG_A, "run-a"))
+    await memory.remember(*_memory(ORG_A, "run-b", project_id=OTHER_PROJECT))
+    # The same problem, kept without a project (as an older memory might be): it never matches either.
+    point_id, stored = _memory(ORG_A, "run-c")
+    payload = stored.model_dump(mode="json")
+    del payload["project_id"]
+    [vector] = await FakeEmbeddings().embed([stored.problem])
+    await HealMemoryRepository(qdrant, "test_heal_memories").upsert(point_id, vector, payload)
+
+    found = await memory.recall(org_id=ORG_A, project_id=PROJECT, run_id="run-x", result=MAVEN_TESTNG)
+    found_elsewhere = await memory.recall(org_id=ORG_A, project_id=OTHER_PROJECT, run_id="run-x", result=MAVEN_TESTNG)
+    hits = await HealMemoryRepository(qdrant, "test_heal_memories").search(  # Qdrant's filter alone
+        org_id=ORG_A, project_id=PROJECT, vector=vector, embedding_model=settings.EMBEDDING_MODEL, limit=5, min_score=0.0
+    )
+
+    assert [payload["run_id"] for _, payload, _ in hits] == ["run-a"]
+    assert [(m.project_id, m.run_id) for m in found] == [(PROJECT, "run-a")]
+    assert [(m.project_id, m.run_id) for m in found_elsewhere] == [(OTHER_PROJECT, "run-b")]
 
 
 @pytest.mark.anyio
@@ -265,8 +289,8 @@ async def test_the_current_run_is_left_out(memory: HealMemoryService) -> None:
     # Its own earlier fixes are already in the healer's prompt.
     await memory.remember(*_memory(ORG_A, "run-1"))
 
-    assert await memory.recall(org_id=ORG_A, run_id="run-1", result=MAVEN_TESTNG) == []
-    assert len(await memory.recall(org_id=ORG_A, run_id="run-2", result=MAVEN_TESTNG)) == 1
+    assert await memory.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-1", result=MAVEN_TESTNG) == []
+    assert len(await memory.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-2", result=MAVEN_TESTNG)) == 1
 
 
 @pytest.mark.anyio
@@ -275,7 +299,7 @@ async def test_successful_and_failed_heals_are_both_kept(memory: HealMemoryServi
     await memory.remember(*_memory(ORG_A, "run-1", after=MAVEN_TESTNG, heal=failed))
     await memory.remember(*_memory(ORG_A, "run-2", after=PASSED))
 
-    found = await memory.recall(org_id=ORG_A, run_id="run-3", result=MAVEN_SELENIUM)
+    found = await memory.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-3", result=MAVEN_SELENIUM)
 
     assert sorted((m.result, m.succeeded) for m in found) == [
         (HealMemoryResult.FIXED, True), (HealMemoryResult.NOT_FIXED, False)
@@ -290,14 +314,14 @@ async def test_at_most_the_configured_number_of_memories_comes_back(
     for number in range(4):
         await memory.remember(*_memory(ORG_A, f"run-{number}"))
 
-    assert len(await memory.recall(org_id=ORG_A, run_id="run-x", result=MAVEN_TESTNG)) == 2
+    assert len(await memory.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-x", result=MAVEN_TESTNG)) == 2
 
 
 @pytest.mark.anyio
 async def test_vectors_of_another_embedding_model_are_not_compared(memory: HealMemoryService) -> None:
     await memory.remember(*_memory(ORG_A, "run-1", embedding_model="another-embedding-model"))
 
-    assert await memory.recall(org_id=ORG_A, run_id="run-2", result=MAVEN_TESTNG) == []
+    assert await memory.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-2", result=MAVEN_TESTNG) == []
 
 
 @pytest.mark.anyio
@@ -306,7 +330,7 @@ async def test_saving_the_same_heal_again_replaces_it(memory: HealMemoryService,
     await memory.remember(*_memory(ORG_A, "run-1", after=PASSED))
 
     assert (await qdrant.count("test_heal_memories")).count == 1
-    [found] = await memory.recall(org_id=ORG_A, run_id="run-2", result=MAVEN_TESTNG)
+    [found] = await memory.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-2", result=MAVEN_TESTNG)
     assert found.result == HealMemoryResult.FIXED
 
 
@@ -316,7 +340,7 @@ async def test_a_query_carries_the_instruction_and_a_stored_problem_does_not(
 ) -> None:
     point_id, stored = _memory(ORG_A, "run-1")
     await memory.remember(point_id, stored)
-    await memory.recall(org_id=ORG_A, run_id="run-2", result=MAVEN_SELENIUM)
+    await memory.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-2", result=MAVEN_SELENIUM)
 
     [[saved_text], [query_text]] = embeddings.calls
     assert saved_text == stored.problem
@@ -332,8 +356,12 @@ async def test_a_search_without_an_organization_is_refused(qdrant: AsyncQdrantCl
     await repository.ensure_collection(FakeEmbeddings.DIMENSIONS)
 
     with pytest.raises(ValueError, match="org_id"):
-        await repository.search(org_id="", vector=[0.1] * FakeEmbeddings.DIMENSIONS, embedding_model="m", limit=3, min_score=0.0)
-    assert await memory.recall(org_id="", run_id="run-1", result=MAVEN_TESTNG) == []
+        await repository.search(org_id="", project_id=PROJECT, vector=[0.1] * FakeEmbeddings.DIMENSIONS,
+                                embedding_model="m", limit=3, min_score=0.0)
+    with pytest.raises(ValueError, match="project_id"):
+        await repository.search(org_id=ORG_A, project_id="", vector=[0.1] * FakeEmbeddings.DIMENSIONS,
+                                embedding_model="m", limit=3, min_score=0.0)
+    assert await memory.recall(project_id=PROJECT, org_id="", run_id="run-1", result=MAVEN_TESTNG) == []
 
 
 @pytest.mark.anyio
@@ -344,34 +372,59 @@ async def test_a_memory_without_an_organization_is_not_saved(memory: HealMemoryS
 
 
 @pytest.mark.anyio
-async def test_another_organizations_memory_from_qdrant_is_dropped() -> None:
-    # Defense in depth: even if a search returned another organization's point, it never reaches the healer.
-    _, stored = _memory(ORG_B, "run-b")
+async def test_another_organizations_or_projects_memory_from_qdrant_is_dropped() -> None:
+    # Defense in depth: even if a search returned another organization's or project's point, it never reaches the healer.
+    _, other_org = _memory(ORG_B, "run-b")
+    _, other_project = _memory(ORG_A, "run-c", project_id=OTHER_PROJECT)
 
     class LeakyRepository:
         async def ensure_collection(self, vector_size: int) -> None: ...
 
         async def search(self, **kwargs: Any) -> list[tuple[str, dict[str, Any], float]]:
-            return [("id-b", stored.model_dump(mode="json"), 0.99)]
+            return [("id-b", other_org.model_dump(mode="json"), 0.99), ("id-c", other_project.model_dump(mode="json"), 0.98)]
 
     service = HealMemoryService(LeakyRepository(), FakeEmbeddings(), enabled=True)  # type: ignore[arg-type]
 
-    assert await service.recall(org_id=ORG_A, run_id="run-a", result=MAVEN_TESTNG) == []
+    assert await service.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-a", result=MAVEN_TESTNG) == []
 
 
 @pytest.mark.anyio
 async def test_down_servers_mean_no_memories_not_a_failed_heal(qdrant: AsyncQdrantClient) -> None:
     service = HealMemoryService(HealMemoryRepository(qdrant, "test_heal_memories"), FakeEmbeddings(fail=True), enabled=True)
 
-    assert await service.recall(org_id=ORG_A, run_id="run-1", result=MAVEN_TESTNG) == []
+    assert await service.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-1", result=MAVEN_TESTNG) == []
     assert await service.remember(*_memory(ORG_A, "run-1")) is False
+
+
+@pytest.mark.anyio
+async def test_an_embedding_server_that_does_not_answer_is_reported_once_until_it_works_again(
+    qdrant: AsyncQdrantClient, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "EMBEDDING_BASE_URL", "http://embed.example:11434")
+    embeddings = FakeEmbeddings(fail=True)
+    service = HealMemoryService(HealMemoryRepository(qdrant, "test_heal_memories"), embeddings, enabled=True)
+
+    with caplog.at_level(logging.INFO, logger=HealMemoryService.__module__):
+        assert await service.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-1", result=MAVEN_TESTNG) == []
+        assert await service.remember(*_memory(ORG_A, "run-1")) is False
+        assert await service.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-2", result=MAVEN_TESTNG) == []
+        problem = service.problem
+        embeddings.fail = False
+        assert await service.remember(*_memory(ORG_A, "run-2")) is True
+
+    assert problem is not None and "embedding server http://embed.example:11434" in problem
+    assert settings.EMBEDDING_MODEL in problem and "ConnectError: connection refused" in problem
+    # One warning, not one per heal; and it is no longer reported once memory works again.
+    assert [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING] == [problem]
+    assert service.problem is None
+    assert "Healer memory works again" in caplog.text
 
 
 @pytest.mark.anyio
 async def test_memory_that_is_off_does_nothing(embeddings: FakeEmbeddings) -> None:
     service = HealMemoryService(embeddings=embeddings, enabled=False)
 
-    assert await service.recall(org_id=ORG_A, run_id="run-1", result=MAVEN_TESTNG) == []
+    assert await service.recall(project_id=PROJECT, org_id=ORG_A, run_id="run-1", result=MAVEN_TESTNG) == []
     assert await service.remember(*_memory(ORG_A, "run-1")) is False
     assert embeddings.calls == []
 

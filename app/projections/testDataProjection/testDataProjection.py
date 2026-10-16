@@ -11,6 +11,8 @@ TEST_DATA_LIST_PROJECTION = {
     "data_set": 1,
     "case_count": 1,
     "error": 1,
+    "token_usage": 1,
+    "revision": 1,
     "created_at": 1,
     "updated_at": 1,
 }
@@ -28,6 +30,8 @@ TEST_DATA_DETAIL_PROJECTION = {
     "data_set": 1,
     "case_count": 1,
     "error": 1,
+    "token_usage": 1,
+    "revision": 1,
     "created_at": 1,
     "updated_at": 1,
 }

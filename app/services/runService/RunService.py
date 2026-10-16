@@ -37,6 +37,7 @@ from app.models.runModel import (
     RunModel,
     RunStage,
     RunStatus,
+    RunTokenUsageModel,
     TestAttemptModel,
     TestReportModel,
 )
@@ -46,7 +47,7 @@ from app.models.testRunModel import TestCommandModel
 from app.projections.runProjection import RUN_DETAIL_PROJECTION, RUN_EVENT_PROJECTION
 from app.repositories.runEventRepository import RunEventRepository
 from app.repositories.runRepository import RunRepository
-from app.services.modelConnectionService import ModelConnectionService, connection_id_or_none
+from app.services.modelConnectionService import ModelConnectionService
 from app.services.projectProfileService import ProjectProfileService
 from app.services.projectService import ProjectService
 from app.services.testDataService import TestDataService
@@ -86,6 +87,7 @@ _OUTPUT_DUMPERS: dict[str, Callable[[Any], Any]] = {
     "test_command": lambda value: TestCommandModel.model_validate(value).model_dump(mode="json"),
     "test_attempts": lambda value: [TestAttemptModel.model_validate(item).model_dump(mode="json") for item in value],
     "test_report": lambda value: TestReportModel.model_validate(value).model_dump(mode="json"),
+    "token_usage": lambda value: RunTokenUsageModel.model_validate(value).model_dump(mode="json"),
 }
 
 
@@ -118,7 +120,6 @@ class RunService:
         for the run's agents (the generator and the healer follow them); an analysis run has no such agent.
         """
         project = await self.project_service.get(project_id, org_id)
-        connection_id = connection_id_or_none(model_connection_id)
         # Fail now (400/404) rather than minutes later inside the run.
         selector = check_test_selector(test_selector) if mode == RunMode.TEST else None
         files = check_test_files(test_files) if mode == RunMode.TEST else None
@@ -136,9 +137,8 @@ class RunService:
                 raise ValidationError(ErrorMessages.NO_RUNNABLE_TEST_CASES)
         else:
             test_data_id = None
-        if connection_id is not None:
-            # Only the id is stored: the key stays in QXcel.
-            await self.model_connection_service.get_llm_config(connection_id, org_id)
+        # Only the id is stored: the key stays in QXcel. None with USE_LOCAL_LLM (the local model).
+        connection_id = await self.model_connection_service.connection_for_request(model_connection_id, org_id)
         outputs: dict[str, Any] = {}
         if mode != RunMode.ANALYZE:
             profile_id = await self._latest_profile_id(project.id, org_id)

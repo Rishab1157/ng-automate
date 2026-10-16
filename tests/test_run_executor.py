@@ -244,7 +244,7 @@ async def test_successful_run_is_completed_and_cleaned_up() -> None:
     assert done.error is None
     assert graph.states == [
         {"run_id": run.id, "org_id": run.org_id, "project_id": run.project_id, "model_connection_id": None,
-         "mode": "analyze", "test_selector": None, "test_files": None, "test_data_id": None}
+         "mode": "analyze", "test_selector": None, "test_files": None, "test_data_id": None, "instructions": None}
     ]
     assert runs.events == [(run.id, RunEventType.RUN_COMPLETED, RUN_COMPLETED_MESSAGE, {"profile_id": "profile-1"})]
     assert sandbox.stopped == []
@@ -289,6 +289,23 @@ async def test_generate_run_says_its_tests_are_saved_when_it_completes() -> None
     [(_, event_type, message, _)] = runs.events
     assert event_type == RunEventType.RUN_COMPLETED
     assert message == "Run completed: the generated tests are saved in the project, ready to review and run"
+
+
+@pytest.mark.anyio
+async def test_generate_run_says_when_its_tests_do_not_build() -> None:
+    run = make_run()
+    runs = FakeRunService(run)
+
+    async def tests_written(state: dict[str, Any]) -> dict[str, Any]:
+        return {**state, "profile_id": "profile-1", "generation": {"files": [{"path": "LoginTest.java"}], "builds": False}}
+
+    executor, _ = make_executor(runs, FakeGraph(tests_written))
+
+    await executor.submit(run.id)
+    await settle(executor)
+
+    [(_, _, message, _)] = runs.events
+    assert "do not build yet" in message and "ready to review and run" not in message
 
 
 @pytest.mark.anyio

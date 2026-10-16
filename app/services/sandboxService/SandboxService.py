@@ -6,7 +6,8 @@ All methods block (unzipping, docker): call them from a worker thread.
 
 Sandboxes run untrusted project code (builds, tests), so they are isolated from each other twice over: every
 container gets its own random session key for its agent server, and all of them sit on a network where
-inter-container traffic is turned off.
+inter-container traffic is turned off. They are kept away from this machine and the LAN too: a helper container
+sets each sandbox's outgoing-traffic rules from outside it (see egress_rules), and no sandbox can change them.
 
 Test sandboxes also have a live view: the browsers the tests drive show on a virtual display, and websockify in
 the container (published on the host's 127.0.0.1 only) lets a viewer in with a token the API adds per viewer.
@@ -24,6 +25,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from openhands.sdk.workspace import BaseWorkspace
 from openhands.workspace import DockerWorkspace
@@ -32,6 +34,7 @@ from app.config import settings
 from app.core.exceptions import ErrorMessages, NotFoundError, SandboxError
 from app.services.projectService import ProjectStorageService
 from app.services.projectService.ProjectStorageService import RUNS_DIR
+from app.utils.LlmInstance import sandbox_base_url
 
 if TYPE_CHECKING:
     from app.models.runModel import RunModel
@@ -44,7 +47,18 @@ SANDBOX_TEST_DATA_DIR = "/workspace/test-data"
 DOCKER_TIMEOUT_SECONDS = 60
 # Docker bridge option that, set to "false", stops containers on the network from reaching each other.
 NETWORK_ICC_OPTION = "com.docker.network.bridge.enable_icc"
+# The egress rules are IPv4 rules: a network with IPv6 would let traffic past them.
+NETWORK_IPV6_OPTION = "com.docker.network.enable_ipv6"
 NETWORK_LABEL = "ngauto.sandboxes=1"
+# Outgoing connections a sandbox may not open: private, shared and link-local IPv4 addresses. They hold this machine
+# (host.docker.internal, the network's gateway, its LAN addresses), the LAN and cloud metadata endpoints. The internet
+# stays open (package downloads), and answers on connections made into the sandbox (agent server, live view) still go.
+BLOCKED_NETWORKS = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16")
+# Every sandbox: without NET_RAW, root in it (agents have sudo) cannot send hand-made packets past those rules.
+SANDBOX_RUN_ARGS = ("--cap-drop", "NET_RAW")
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+# Host names and IPv4 addresses only; a leading "-" would read as an option.
+_ENDPOINT_HOST_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")
 # Build caches inside the test sandbox (docker/sandbox-test/Dockerfile creates these folders).
 BUILD_CACHE_PATHS = {
     "maven": "/home/openhands/.m2",
@@ -127,10 +141,19 @@ class SandboxService:
         data_dir: Path = settings.DATA_DIR,
         workspace_factory: Callable[..., BaseWorkspace] = _SandboxDockerWorkspace,
         network: str | None = settings.SANDBOX_NETWORK,
+        egress_firewall: bool = settings.SANDBOX_EGRESS_FIREWALL,
+        firewall_image: str = settings.SANDBOX_FIREWALL_IMAGE,
+        allowed_endpoints: list[tuple[str, int]] | None = None,
     ) -> None:
         # Docker reads 0 as "no limit".
         if cpus <= 0 or memory_mb <= 0 or startup_timeout_seconds <= 0:
             raise ValueError("Sandbox CPUs, memory and startup timeout must be positive")
+        # Built here, so a bad allowed endpoint fails at once. Default: the local model's server and SANDBOX_ALLOWED_HOSTS.
+        self._egress_rules = egress_rules(default_allowed_endpoints() if allowed_endpoints is None else allowed_endpoints)
+        self.egress_firewall = egress_firewall
+        self.firewall_image = firewall_image
+        if not egress_firewall:
+            logger.warning("Sandbox firewall is off: sandboxes can reach this machine's services and the LAN")
         self.image = image
         self.test_image = test_image
         self.build_caches = build_caches
@@ -232,6 +255,7 @@ class SandboxService:
             if not container_id:
                 raise SandboxError(ErrorMessages.SANDBOX_FAILED.format(reason="the container id is unknown"))
             self._apply_limits(container_id)
+            self._apply_egress_rules(container_id)
             if on_started is not None:
                 on_started(container_id)
             logger.info("Sandbox %s started (%s)", container_id[:12], "writable" if writable else "read-only")
@@ -329,11 +353,11 @@ class SandboxService:
             raise SandboxError(ErrorMessages.SANDBOX_FAILED.format(reason="the project folder is missing"))
         if self.network is not None:
             self._ensure_network()
-        options: dict[str, Any] = {}
+        options: dict[str, Any] = {"extra_run_args": [*SANDBOX_RUN_ARGS]}
         if writable:
             # Test sandboxes: the live view's port is published too (on the host's 127.0.0.1, agent server port + 1),
             # and browsers get enough shared memory.
-            options = {"extra_ports": True, "extra_run_args": [f"--shm-size={TEST_SANDBOX_SHM_SIZE}"]}
+            options = {"extra_ports": True, "extra_run_args": [*SANDBOX_RUN_ARGS, f"--shm-size={TEST_SANDBOX_SHM_SIZE}"]}
         attempt = 1
         while True:
             try:
@@ -378,6 +402,9 @@ class SandboxService:
             if options.get(NETWORK_ICC_OPTION) != "false":
                 logger.error("Docker network %s lets containers reach each other: refusing to use it", name)
                 raise SandboxError(ErrorMessages.SANDBOX_FAILED.format(reason="its network is not isolated"))
+            if options.get(NETWORK_IPV6_OPTION) == "true":
+                logger.error("Docker network %s has IPv6, which the sandbox firewall does not cover: refusing it", name)
+                raise SandboxError(ErrorMessages.SANDBOX_FAILED.format(reason="its network is not isolated"))
             self._network_ready = True
 
     def _network_options(self, name: str) -> dict[str, Any] | None:
@@ -398,6 +425,28 @@ class SandboxService:
             logger.error("Could not limit sandbox %s: %s", container_id, failure)
             raise SandboxError(ErrorMessages.SANDBOX_FAILED.format(reason="its CPU and memory limits could not be set"))
 
+    def _apply_egress_rules(self, container_id: str) -> None:
+        """Load the sandbox's outgoing-traffic rules (egress_rules) into its network namespace.
+
+        A short-lived helper container in that namespace loads them. It has NET_ADMIN and the sandbox has not, so
+        nothing in the sandbox, root included, can change them afterwards.
+        """
+        if self.network is None or not self.egress_firewall:
+            return
+        _check_container_id(container_id)
+        # --pull never: a same-named image from a registry would run with NET_ADMIN next to the sandbox.
+        args = [
+            "run", "--rm", "-i", "--pull", "never", "--network", f"container:{container_id}",
+            "--cap-drop", "ALL", "--cap-add", "NET_ADMIN", "--", self.firewall_image,
+        ]
+        failure = self._docker(args, input=self._egress_rules)
+        if failure is None:
+            return
+        logger.error("Could not set the network rules of sandbox %s: %s", container_id[:12], failure)
+        missing = any(text in failure.lower() for text in ("no such image", "unable to find image"))
+        reason = "the sandbox firewall image is not built" if missing else "its network rules could not be set"
+        raise SandboxError(ErrorMessages.SANDBOX_FAILED.format(reason=reason))
+
     def _dispose(self, workspace: BaseWorkspace, container_id: str | None) -> None:
         """Stop the container without hiding the error that ended the session, if any."""
         try:
@@ -411,10 +460,10 @@ class SandboxService:
             except Exception:
                 logger.error("Sandbox %s may still be running", container_id, exc_info=True)
 
-    def _docker(self, args: list[str]) -> str | None:
+    def _docker(self, args: list[str], input: str | None = None) -> str | None:
         """Run one docker command: None when it worked, else what went wrong (for the log only)."""
         try:
-            result = self._run_docker(args)
+            result = self._run_docker(args, input=input)
         except subprocess.TimeoutExpired:
             return f"docker {args[0]} took longer than {DOCKER_TIMEOUT_SECONDS} seconds"
         except OSError as error:
@@ -424,10 +473,15 @@ class SandboxService:
         return result.stderr.strip() or f"docker {args[0]} exited with code {result.returncode}"
 
     def _run_docker(self, args: list[str], input: str | None = None) -> subprocess.CompletedProcess[str]:
-        # The one place that runs docker directly (tests replace it). `input` goes to docker's stdin.
-        return subprocess.run(
-            ["docker", *args], input=input, capture_output=True, encoding="utf-8", errors="replace",
+        # The one place that runs docker directly (tests replace it). `input` goes to docker's stdin as bytes: text mode
+        # would turn "\n" into "\r\n" on Windows, which iptables-restore rejects.
+        result = subprocess.run(
+            ["docker", *args], input=None if input is None else input.encode("utf-8"), capture_output=True,
             timeout=DOCKER_TIMEOUT_SECONDS, check=False,
+        )
+        return subprocess.CompletedProcess(
+            result.args, result.returncode,
+            result.stdout.decode("utf-8", errors="replace"), result.stderr.decode("utf-8", errors="replace"),
         )
 
 
@@ -461,6 +515,42 @@ def _hide_session_key(text: str) -> str:
     for key in keys:
         text = text.replace(key, "***")
     return text
+
+
+def egress_rules(allowed: list[tuple[str, int]]) -> str:
+    """A sandbox's outgoing-traffic rules, for iptables-restore: no new connection to BLOCKED_NETWORKS, except to the
+    allowed TCP (host, port) endpoints. Host names are looked up inside the sandbox's network, where
+    host.docker.internal is this machine."""
+    lines = [
+        "*filter",
+        ":OUTPUT ACCEPT [0:0]",
+        "-A OUTPUT -o lo -j ACCEPT",
+        "-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+    ]
+    for host, port in allowed:
+        if not _ENDPOINT_HOST_PATTERN.match(host) or not 0 < port < 65536:
+            raise ValueError(f"Not a host and port a sandbox can be allowed to reach: {host!r}, {port!r}")
+        lines.append(f"-A OUTPUT -p tcp -d {host} --dport {port} -j ACCEPT")
+    lines += [f"-A OUTPUT -d {network} -j REJECT --reject-with icmp-admin-prohibited" for network in BLOCKED_NETWORKS]
+    return "\n".join([*lines, "COMMIT", ""])
+
+
+def default_allowed_endpoints() -> list[tuple[str, int]]:
+    """The private endpoints sandboxes may reach: the local model's server (as sandboxes see it) and
+    SANDBOX_ALLOWED_HOSTS ("host:port")."""
+    endpoints = [_endpoint(f"//{entry}") for entry in settings.SANDBOX_ALLOWED_HOSTS]
+    if settings.USE_LOCAL_LLM and settings.LLM_BASE_URL:
+        endpoints.append(_endpoint(sandbox_base_url(settings.LLM_BASE_URL) or ""))
+    return endpoints
+
+
+def _endpoint(url: str) -> tuple[str, int]:
+    """(host, port) of a URL or "//host:port"; the port may only be left out when the scheme gives it."""
+    parts = urlsplit(url)
+    port = parts.port or _DEFAULT_PORTS.get(parts.scheme)  # .port raises ValueError for a bad port
+    if not parts.hostname or port is None:
+        raise ValueError(f"Not a host:port a sandbox can be allowed to reach: {url!r}")
+    return parts.hostname, port
 
 
 def _check_container_id(container_id: str) -> None:

@@ -13,6 +13,8 @@ import litellm
 
 from app.config import settings
 from app.models.llmModel import LlmConfigModel
+from app.models.tokenUsageModel import TokenUsageModel
+from app.utils.TokenCost import priced
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +32,12 @@ def complete_json(
     parse: Callable[[str], T],
     attempts: int = settings.STRUCTURED_OUTPUT_ATTEMPTS,
     timeout_seconds: int = 300,
+    on_usage: Callable[[TokenUsageModel], None] | None = None,
 ) -> T:
     """Ask for JSON matching `schema`, validated by `parse` (which raises ValueError when it is not usable).
 
-    Raises ValueError with a short reason when no attempt produced a usable reply.
+    Raises ValueError with a short reason when no attempt produced a usable reply. `on_usage` gets what each answered
+    call used (tokens, estimated input and output cost).
     """
     messages: list[dict[str, str]] = [
         {"role": "system", "content": instructions},
@@ -42,7 +46,7 @@ def complete_json(
     reason = "no attempt was made"
     for attempt in range(1, max(attempts, 1) + 1):
         try:
-            reply = _complete(llm_config, messages, schema_name, schema, timeout_seconds)
+            reply = _complete(llm_config, messages, schema_name, schema, timeout_seconds, on_usage)
         except Exception as error:
             # Provider errors can quote endpoints or keys: log the type only.
             logger.warning("Structured output call failed (attempt %d): %s", attempt, type(error).__name__)
@@ -67,6 +71,7 @@ def _complete(
     schema_name: str,
     schema: dict[str, Any],
     timeout_seconds: int,
+    on_usage: Callable[[TokenUsageModel], None] | None = None,
 ) -> str:
     options: dict[str, Any] = {}
     if llm_config.num_ctx:
@@ -81,4 +86,25 @@ def _complete(
         timeout=timeout_seconds,
         **options,
     )
+    if on_usage is not None:
+        on_usage(priced(_usage(response), llm_config.model))
     return response.choices[0].message.content or ""
+
+
+def _usage(response: Any) -> TokenUsageModel:
+    """What one call used, as LiteLLM reports it. Never raises: a count it does not report stays 0."""
+    usage = getattr(response, "usage", None)
+    prompt_details = getattr(usage, "prompt_tokens_details", None)
+    completion_details = getattr(usage, "completion_tokens_details", None)
+    return TokenUsageModel(
+        input_tokens=_count(getattr(usage, "prompt_tokens", 0)),
+        cached_input_tokens=_count(getattr(prompt_details, "cached_tokens", 0)),
+        cache_write_tokens=_count(getattr(usage, "cache_creation_input_tokens", 0)),
+        output_tokens=_count(getattr(usage, "completion_tokens", 0)),
+        reasoning_tokens=_count(getattr(completion_details, "reasoning_tokens", 0)),
+        calls=1,
+    )
+
+
+def _count(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0

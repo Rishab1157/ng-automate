@@ -34,6 +34,8 @@ class MasterState(TypedDict, total=False):
     test_command: dict[str, Any]
     test_attempts: list[dict[str, Any]] | None
     test_report: dict[str, Any]
+    # RunTokenUsageModel as a JSON dict: what the agents' LLM calls used so far (not a stage output).
+    token_usage: dict[str, Any]
 
 
 def initial_state(run: RunModel) -> MasterState:

@@ -1,12 +1,12 @@
 """The test generator's messages: the check NG Automate chose, the user's instructions before the rules, where the
-work stands, and nothing from another stack in a Playwright TypeScript project's messages. Plain strings, no LLM."""
+work stands, the same rules for every stack, and nothing from another stack in a Playwright TypeScript project's
+messages. Plain strings, no LLM."""
 
 from collections.abc import Sequence
 
 import pytest
 
 from app.agents.RunnerAgent.TestCommandResolver import resolve_test_command
-from app.agents.TestGeneratorAgent.GeneratedTestPlacement import placement_rule
 from app.agents.TestGeneratorAgent.TestGeneratorPrompts import (
     build_fix_prompt,
     build_generate_prompt,
@@ -92,7 +92,7 @@ ERRORS = (
 def _first(command: TestCommandModel = COMMAND, instructions: Sequence[str] = ()) -> str:
     """The first message for the Playwright project: TD-001 now, one more case later."""
     return build_generate_prompt(
-        [LOGIN], PLAYWRIGHT_TS, FINDINGS, command, placement_rule(PLAYWRIGHT_TS), 2, BRIEFING, instructions
+        [LOGIN], PLAYWRIGHT_TS, FINDINGS, command, 2, BRIEFING, instructions
     )
 
 
@@ -153,6 +153,53 @@ def test_the_fix_message_carries_the_errors_the_check_and_where_the_work_stands(
     assert ERRORS in prompt  # braces in the errors are kept as written
     assert COMMAND.check in prompt
     assert STATE in prompt
+
+
+# ---------- generic: one fixed folder, the rest is the framework's ----------
+
+# Per-stack placement and framework know-how the rules no longer give: where a framework's files go, how it works.
+PER_STACK = (
+    "src/test", "package named", "Class names end with", "test_<case>.py", ".robot", "new .feature file",
+    "Feature files", "glue", "where the runner finds steps", "Appium", "accessibility id",
+)
+
+
+def _sheet(build: str, frameworks: list[str], bdd: str | None = None, language: str = "Java") -> FactSheetModel:
+    return PLAYWRIGHT_TS.model_copy(update={
+        "primary_language": _fact(language), "build_tool": _fact(build), "test_frameworks": _fact(frameworks),
+        "automation_tools": _fact(["Selenium"]), "bdd_tool": _fact(bdd),
+    })
+
+
+def test_the_rules_are_the_same_for_every_stack_one_fixed_folder_and_the_rest_left_to_the_framework() -> None:
+    stacks = [
+        PLAYWRIGHT_TS,
+        _sheet("Maven", ["TestNG"]),
+        _sheet("Maven", ["TestNG"], "Cucumber"),
+        _sheet("pip", ["pytest"], language="Python"),
+        PLAYWRIGHT_TS.model_copy(update={"automation_tools": _fact(["Appium"])}),
+    ]
+
+    rules = {
+        build_generate_prompt([LOGIN], sheet, FINDINGS, COMMAND, 2, BRIEFING).split(RULES, 1)[1] for sheet in stacks
+    }
+
+    assert len(rules) == 1  # nothing in the rules depends on the stack
+    [text] = rules
+    assert "Put your new test files only in a new folder named 'ngauto'" in text
+    assert "Every other file you need goes where this framework expects it" in text
+    assert "Add whatever the framework needs to find and run your new tests" in text
+    assert [detail for detail in PER_STACK if detail in text] == []
+
+
+def test_done_means_the_projects_own_test_command_finds_and_runs_the_new_tests_with_or_without_a_check() -> None:
+    # A real run: the build check passed, but the feature files sat where the build never copies them and there was no
+    # runner, so not one scenario ran. Building or loading the new tests is not enough.
+    for command in (COMMAND, NO_CHECK_COMMAND):
+        rules = _first(command).split(RULES, 1)[1]
+        assert "the project's own test command would find and run your new tests" in rules
+        assert "building or loading them is not enough" in rules
+        assert "without running the tests" in rules and "Do not run the whole suite" in rules
 
 
 # ---------- generic: nothing from another stack ----------

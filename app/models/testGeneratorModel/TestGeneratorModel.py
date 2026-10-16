@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 
 from app.models.healerModel import FileChangeModel, GuardViolationModel
+from app.models.tokenUsageModel import TokenUsageModel
 
 
 class SkippedCaseModel(BaseModel):
@@ -31,3 +32,5 @@ class GenerationOutcomeModel(BaseModel):
     unverified_locators: list[UnverifiedLocatorModel] = Field(default_factory=list)
     # Why the generator stopped early (model unreachable, out of time, ...); its files are still checked and kept.
     error: str | None = None
+    # Tokens the generator's LLM calls used; None when they could not be read.
+    token_usage: TokenUsageModel | None = None

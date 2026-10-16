@@ -2,30 +2,40 @@
 
 Our own JSON/CSV test-case format is read at once (status ready). JSON in any other shape and plain text are stored
 as they are (status processing) and turned into test cases by an LLM in the background (TestDataProcessor), with the
-upload's model connection or, without one, the default model from .env. The user can then review and edit the cases
-(PUT) before a generate run uses them. Bad files are rejected with a clear message (400) before anything is stored.
+local model (USE_LOCAL_LLM) or the upload's model connection. The user can then review and edit the cases (PUT), or
+edit the file itself in the editor (its text is read again), before a generate run uses them. Bad files are rejected
+with a clear message (400) before anything is stored.
 """
 
 import asyncio
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from bson import ObjectId
 from pymongo import DESCENDING
 
-from app.core.exceptions import ErrorMessages, NotFoundError, ValidationError
+from app.core.exceptions import ErrorMessages, NotFoundError, ProjectBusyError, ValidationError
 from app.models.testDataModel import (
     TestCaseSpecModel,
+    TestDataContentModel,
+    TestDataFormat,
     TestDataMapper,
     TestDataSetModel,
     TestDataStatus,
     TestDataUploadModel,
 )
+from app.models.tokenUsageModel import TokenUsageModel
 from app.projections.testDataProjection import TEST_DATA_DETAIL_PROJECTION, TEST_DATA_LIST_PROJECTION
 from app.repositories.testDataRepository import TestDataRepository
-from app.services.modelConnectionService import ModelConnectionService, connection_id_or_none
+from app.services.modelConnectionService import ModelConnectionService
 from app.services.projectService import ProjectService
+from app.services.projectService.ProjectFileService import MAX_EDITABLE_BYTES
 from app.utils.TestDataParser import FreeFormSource, build_test_data_set, read_test_data
+
+if TYPE_CHECKING:
+    from app.services.runService import RunService
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +51,16 @@ class TestDataService:
         self.test_data_repo = TestDataRepository()
         self.project_service = ProjectService()
         self.model_connection_service = ModelConnectionService()
+        self._run_service: "RunService | None" = None
+
+    @property
+    def run_service(self) -> "RunService":
+        # Loaded on first use: RunService uses this service (generate runs read their test data).
+        if self._run_service is None:
+            from app.services.runService import RunService
+
+            self._run_service = RunService()
+        return self._run_service
 
     async def create(
         self,
@@ -76,10 +96,7 @@ class TestDataService:
     ) -> TestDataUploadModel:
         common = {"org_id": org_id, "project_id": project_id, "user_id": user_id, "filename": filename[-MAX_FILENAME_CHARS:]}
         if isinstance(source, FreeFormSource):
-            connection_id = connection_id_or_none(model_connection_id)
-            if connection_id is not None:
-                # Fail now (400/404) rather than minutes later in the background.
-                await self.model_connection_service.get_llm_config(connection_id, org_id)
+            connection_id = await self.model_connection_service.connection_for_request(model_connection_id, org_id)
             db_model = TestDataMapper.to_create_db_model(
                 **common, source_format=source.source_format, raw_source=source.text, model_connection_id=connection_id
             )
@@ -142,28 +159,132 @@ class TestDataService:
         })
         return await self.get(test_data_id, project_id, org_id)
 
-    async def retry(self, test_data_id: str, project_id: str, org_id: str) -> TestDataUploadModel:
-        """Read a source that failed once more (the caller starts the processor)."""
+    async def retry(
+        self, test_data_id: str, project_id: str, org_id: str, model_connection_id: str | None = None
+    ) -> TestDataUploadModel:
+        """Read a source that failed once more (the caller starts the processor), with the model connection sent or
+        the one chosen before."""
         upload = await self.get(test_data_id, project_id, org_id)
         if upload.status != TestDataStatus.FAILED or upload.raw_source is None:
             raise ValidationError(ErrorMessages.TEST_DATA_RETRY_NOT_ALLOWED)
-        await self._set(test_data_id, {"status": TestDataStatus.PROCESSING.value, "error": None})
+        connection_id = await self.model_connection_service.connection_for_request(
+            model_connection_id, org_id, upload.model_connection_id
+        )
+        await self._set(test_data_id, {
+            "status": TestDataStatus.PROCESSING.value,
+            "error": None,
+            "model_connection_id": ObjectId(connection_id) if connection_id else None,
+        })
         return await self.get(test_data_id, project_id, org_id)
 
-    async def mark_ready(self, test_data_id: str, data_set: TestDataSetModel) -> None:
-        await self._set(test_data_id, {
+    async def read_content(self, test_data_id: str, project_id: str, org_id: str) -> TestDataContentModel:
+        """The file's text as it is stored, for the editor (not the cases read from it)."""
+        upload = await self.get(test_data_id, project_id, org_id)
+        path = self.project_service.storage.test_data_file(upload.project_id, upload.filename)
+        return await asyncio.to_thread(_read_content, upload, path)
+
+    async def replace_content(
+        self, test_data_id: str, project_id: str, org_id: str, content: str, model_connection_id: str | None = None
+    ) -> TestDataUploadModel:
+        """The editor's save: the file gets the new text, which is read again like an upload (ready at once for our
+        own format; otherwise processing, and the caller starts the processor). Nothing changes when the text is
+        invalid (400) or while a run uses the project (409): its sandbox has the test-data folder."""
+        upload = await self.get(test_data_id, project_id, org_id)
+        if await self.run_service.has_active_run(upload.project_id, org_id):
+            raise ProjectBusyError(ErrorMessages.PROJECT_BUSY)
+        data = content.encode("utf-8")
+        source = read_test_data(data, upload.filename)
+        fields: dict[str, Any] = {"source_format": TestDataFormat(source.source_format).value, "error": None}
+        if isinstance(source, FreeFormSource):
+            connection_id = await self.model_connection_service.connection_for_request(
+                model_connection_id, org_id, upload.model_connection_id
+            )
+            fields |= {
+                "status": TestDataStatus.PROCESSING.value,
+                "raw_source": source.text,
+                "model_connection_id": ObjectId(connection_id) if connection_id else None,
+                "data_set": None,
+                "case_count": 0,
+            }
+        else:
+            fields |= {
+                "status": TestDataStatus.READY.value,
+                "raw_source": None,
+                "data_set": source.model_dump(mode="json"),
+                "case_count": len(source.cases),
+                "token_usage": None,  # read without an LLM
+            }
+        storage = self.project_service.storage
+        await asyncio.to_thread(storage.replace_test_data_file, upload.project_id, upload.filename, data)
+        # A reading of the old text that is still going on must not overwrite this one (see mark_ready).
+        await self.test_data_repo.update_one(
+            {"_id": ObjectId(test_data_id)},
+            {"$set": {**fields, "updated_at": datetime.now(UTC)}, "$inc": {"revision": 1}},
+        )
+        logger.info("Test data %s edited (%s, %s)", test_data_id, fields["source_format"], fields["status"])
+        return await self.get(test_data_id, project_id, org_id)
+
+    async def mark_ready(
+        self,
+        test_data_id: str,
+        data_set: TestDataSetModel,
+        revision: int | None = None,
+        token_usage: TokenUsageModel | None = None,
+    ) -> bool:
+        """The cases read from the source, and the tokens reading it used. With `revision` (the source's version that
+        was read): written only if the source is still that version, else False."""
+        written = await self._set(test_data_id, {
             "status": TestDataStatus.READY.value,
             "data_set": data_set.model_dump(mode="json"),
             "case_count": len(data_set.cases),
             "error": None,
-        })
-        logger.info("Test data %s read: %d case(s)", test_data_id, len(data_set.cases))
+            "token_usage": _dump_usage(token_usage),
+        }, revision)
+        if written:
+            logger.info("Test data %s read: %d case(s)", test_data_id, len(data_set.cases))
+        return written
 
-    async def mark_failed(self, test_data_id: str, reason: str) -> None:
-        await self._set(test_data_id, {"status": TestDataStatus.FAILED.value, "error": reason[:MAX_ERROR_CHARS]})
-        logger.warning("Test data %s could not be read: %s", test_data_id, reason[:MAX_ERROR_CHARS])
+    async def mark_failed(
+        self, test_data_id: str, reason: str, revision: int | None = None, token_usage: TokenUsageModel | None = None
+    ) -> bool:
+        """Like mark_ready, for a source that could not be read."""
+        written = await self._set(test_data_id, {
+            "status": TestDataStatus.FAILED.value,
+            "error": reason[:MAX_ERROR_CHARS],
+            "token_usage": _dump_usage(token_usage),
+        }, revision)
+        if written:
+            logger.warning("Test data %s could not be read: %s", test_data_id, reason[:MAX_ERROR_CHARS])
+        return written
 
-    async def _set(self, test_data_id: str, fields: dict) -> None:
-        await self.test_data_repo.update_one(
-            {"_id": ObjectId(test_data_id)}, {"$set": {**fields, "updated_at": datetime.now(UTC)}}
-        )
+    async def _set(self, test_data_id: str, fields: dict, revision: int | None = None) -> bool:
+        query: dict[str, Any] = {"_id": ObjectId(test_data_id)}
+        if revision is not None:
+            # Documents from before the editor have no revision: they are revision 0.
+            query["revision"] = revision if revision else {"$in": [0, None]}
+        changed = await self.test_data_repo.update_one(query, {"$set": {**fields, "updated_at": datetime.now(UTC)}})
+        return changed > 0
+
+
+def _dump_usage(token_usage: TokenUsageModel | None) -> dict[str, Any] | None:
+    return token_usage.model_dump(mode="json") if token_usage is not None else None
+
+
+def _read_content(upload: TestDataUploadModel, path: Path) -> TestDataContentModel:
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        raise NotFoundError(ErrorMessages.FILE_NOT_FOUND) from None
+    known = {"test_data_id": upload.id, "filename": upload.filename, "size_bytes": size}
+    if size > MAX_EDITABLE_BYTES:
+        reason = ErrorMessages.FILE_TOO_LARGE_TO_EDIT.format(limit_kb=MAX_EDITABLE_BYTES // 1024)
+        return TestDataContentModel(**known, editable=False, reason=reason)
+    data = path.read_bytes()
+    try:
+        # utf-8-sig: a byte order mark is not part of the text (the parser accepts the file either way).
+        text = None if b"\0" in data else data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = None
+    if text is None:
+        return TestDataContentModel(**known, editable=False, reason=ErrorMessages.TEST_DATA_NOT_TEXT)
+    return TestDataContentModel(**known, content=text, editable=True)

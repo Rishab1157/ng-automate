@@ -115,3 +115,19 @@ def test_limits() -> None:
     too_many_cases = [{"id": str(i), "title": "t", "steps": [{"action": "open", "target": "u"}]} for i in range(501)]
     with pytest.raises(ValidationError, match="more than 500"):
         parse_test_data(json.dumps(too_many_cases).encode(), "x.json")
+
+
+def test_a_txgenie_steps_locator_becomes_its_target() -> None:
+    from app.utils.TestDataParser import read_test_data
+
+    case = {"id": "TC001", "title": "Login", "steps": [
+        {"step_number": 1, "action": "Click the Login button (locator: [data-test='login-button'])", "test_data": "",
+         "expected_result": "The products page opens"},
+        {"step_number": 2, "action": "Type the user name", "locator": "#user-name", "test_data": "standard_user",
+         "expected_result": ""},
+        {"step_number": 3, "action": "Check the title", "test_data": "", "expected_result": "Products"},
+    ]}
+
+    data_set = read_test_data(json.dumps({"test_cases": [case]}).encode(), "txgenie.json")
+
+    assert [step.target for step in data_set.cases[0].steps] == ["[data-test='login-button']", "#user-name", None]

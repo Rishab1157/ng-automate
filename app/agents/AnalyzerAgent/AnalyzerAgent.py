@@ -34,6 +34,7 @@ from app.core.exceptions import AnalysisError, ErrorMessages
 from app.models.analyzerModel import AnalyzerFindingsModel, Confidence, FactModel, FactSheetModel, FactSource
 from app.models.llmModel import LlmConfigModel
 from app.models.runModel import RunEventLevel, RunEventType
+from app.models.tokenUsageModel import TokenUsageModel
 from app.utils.AgentConversationUtils import (
     MODEL_UNREACHABLE_FROM_SANDBOX,
     AgentControl,
@@ -118,6 +119,8 @@ class AnalyzerAgent:
         self.repair_attempts = max(repair_attempts, 0)
         # Last resort for answers the agent could not fix; injectable for tests.
         self.formatter = formatter or self._format_with_schema
+        # What analyze()'s LLM calls used (the agent and the formatter), also when it fails.
+        self.token_usage = TokenUsageModel()
 
     def analyze(
         self,
@@ -167,7 +170,7 @@ class AnalyzerAgent:
             except ValueError as error:
                 raise AnalysisError(ErrorMessages.ANALYSIS_FAILED.format(reason=str(error))) from None
         finally:
-            close_conversation(conversation)
+            self.token_usage = self.token_usage.add(close_conversation(conversation, self.llm_config.model))
 
     def _format_with_schema(self, answer: str) -> AnalyzerFindingsModel:
         return complete_json(
@@ -177,7 +180,11 @@ class AnalyzerAgent:
             "analyzer_findings",
             AnalyzerFindingsModel.model_json_schema(),
             parse_findings,
+            on_usage=self._count_usage,
         )
+
+    def _count_usage(self, usage: TokenUsageModel) -> None:
+        self.token_usage = self.token_usage.add(usage)
 
     def _build_agent(self) -> Agent:
         llm = build_llm(self.llm_config)

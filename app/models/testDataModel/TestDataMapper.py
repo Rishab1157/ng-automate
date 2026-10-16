@@ -3,6 +3,8 @@ from typing import Any
 
 from bson import ObjectId
 
+from app.models.tokenUsageModel import TokenUsageModel
+
 from .TestDataDbModel import TestDataCreateDbModel
 from .TestDataModel import TestDataFormat, TestDataSetModel, TestDataStatus
 from .TestDataUploadModel import TestDataUploadModel
@@ -59,6 +61,8 @@ class TestDataMapper:
             data_set=TestDataSetModel.model_validate(data_set) if data_set is not None else None,
             case_count=doc.get("case_count") or 0,
             error=doc.get("error"),
+            token_usage=TokenUsageModel.model_validate(doc["token_usage"]) if doc.get("token_usage") else None,
+            revision=doc.get("revision") or 0,
             created_at=doc["created_at"],
             updated_at=doc.get("updated_at") or doc["created_at"],
         )

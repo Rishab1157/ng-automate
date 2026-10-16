@@ -87,6 +87,16 @@ def describe_agent_failure(code: str | None, kind: FailureKind | None) -> str:
     return _FAILURE_REASONS.get(kind, AGENT_STOPPED) if kind else AGENT_STOPPED
 
 
+def observation_text(observation: Any) -> str:
+    """What the agent saw of a tool's result. The agent server's observation names its own folder for a long output's
+    full text (a relative path): reading it as-is would save that text again here, under the API's working directory
+    (that is what left workspace/conversations/ in the repo). Nothing here reads such a file back.
+    """
+    if getattr(observation, "full_output_save_dir", None):
+        observation = observation.model_copy(update={"full_output_save_dir": None})
+    return "".join(content_to_str(observation.to_llm_content))
+
+
 def _map_action(event: ActionEvent) -> AgentEvent:
     args = _action_args(event)
     data: dict[str, Any] = {"tool": event.tool_name}
@@ -102,7 +112,7 @@ def _map_observation(event: ObservationEvent) -> AgentEvent:
     observation = event.observation
     data: dict[str, Any] = {
         "tool": event.tool_name,
-        "output": clip("".join(content_to_str(observation.to_llm_content)), MAX_OUTPUT_CHARS),
+        "output": clip(observation_text(observation), MAX_OUTPUT_CHARS),
     }
     if observation.is_error:
         data["error"] = True

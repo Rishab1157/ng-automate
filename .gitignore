@@ -17,3 +17,6 @@ data/
 # Server logs
 logs/
 .pytest_cache/
+
+# OpenHands conversation files (a safety net: the API no longer writes them)
+workspace/

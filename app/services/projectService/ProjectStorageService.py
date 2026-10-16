@@ -78,6 +78,19 @@ class ProjectStorageService:
     def delete_test_data_file(self, project_id: str, name: str) -> None:
         (self.test_data_dir(project_id) / _safe_name(name)).unlink(missing_ok=True)
 
+    def test_data_file(self, project_id: str, name: str) -> Path:
+        """A stored test-data file by its stored name (which is always a plain, safe name)."""
+        return self.test_data_dir(project_id) / _safe_name(name)
+
+    def replace_test_data_file(self, project_id: str, name: str, content: bytes) -> None:
+        """Write a stored test-data file's new content (the editor's save) in one step: a reader never sees half of
+        it."""
+        target = self.test_data_file(project_id, name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_name(target.name + ".ngauto-partial")
+        partial.write_bytes(content)
+        partial.replace(target)
+
     def apply_run_changes(self, project_id: str, run_project_dir: Path, paths: list[str]) -> int:
         """Bring the files a run's agents changed into the editable copy, as they are at the end of the run.
 

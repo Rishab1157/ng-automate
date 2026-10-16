@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.models.testDataModel import TestCaseSpecModel, TestDataFormat, TestDataStatus, TestDataUploadModel
+from app.models.tokenUsageModel import TokenUsageModel
 
 
 class TestDataSummaryResponseDTO(BaseModel):
@@ -20,6 +21,8 @@ class TestDataSummaryResponseDTO(BaseModel):
     # e.g. "case LOGIN-2 step 3: click needs a locator". Such cases are not generated.
     warnings: list[str]
     error: str | None = None
+    # Tokens the LLM used to read a free-form source, and their estimated cost.
+    token_usage: TokenUsageModel | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -34,6 +37,7 @@ class TestDataSummaryResponseDTO(BaseModel):
             case_count=upload.case_count,
             warnings=upload.data_set.warnings if upload.data_set else [],
             error=upload.error,
+            token_usage=upload.token_usage,
             created_at=upload.created_at,
             updated_at=upload.updated_at,
         )

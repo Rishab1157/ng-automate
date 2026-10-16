@@ -131,7 +131,8 @@ def test_generated_feature_is_kept_as_written(conversation: Callable[..., list[F
     assert "src/test/java/com/demo/pages: page objects" in prompt
     assert "A sample of the project's own tests and shared code" in prompt
     assert "class LoginSteps" in prompt  # the project's own helper is inlined, so the model can reuse its API
-    assert "new .feature file" in prompt  # where the scenarios go (a Cucumber project)
+    assert "new folder named 'ngauto'" in prompt  # the one fixed place: the rest is the framework's own
+    assert "new .feature file" not in prompt  # no per-stack placement, also in a Cucumber project
     assert {tool.name for tool in fake.agent.tools} == set(GENERATOR_TOOL_NAMES)
 
 
@@ -467,6 +468,7 @@ def test_tests_that_never_build_are_left_to_the_healer(
 
     assert len(created[0].messages) == 3  # the batch, then 2 fixes
     assert outcome.builds is False
+    assert outcome.summary.startswith("The build check still failed at the end")  # before the agent's own words
     assert any("still do not build after 2 fixes" in e.message for e in events)
     assert [f.path for f in outcome.files] == [FEATURE]  # what it wrote is kept for the healer
 
@@ -514,8 +516,34 @@ def test_a_case_written_twice_is_reported_and_the_next_batch_is_told_to_keep_one
 
     third = created[0].messages[2]
     assert "CASE-1 is in 2 of your files" in third and "keep the best file" in third
+    # Nothing follows the last batch, so the copies it made go back once more before the generator finishes.
+    finish = created[0].messages[3]
+    assert finish.startswith("Before you finish") and "CASE-1 is in 3 of your files" in finish
+    assert len(created[0].messages) == 4
     notices = [e.message for e in events if e.type == RunEventType.AGENT_ERROR]
     assert any(notice.startswith("Some test cases are in more than one generated file (CASE-1)") for notice in notices)
+
+
+def test_feature_files_asked_for_in_a_project_without_bdd_get_the_generic_rules_and_a_check_that_they_run(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
+    # A real run: on this Maven + TestNG project the generator wrote the feature files into src/test/java (the build
+    # copies no feature files from there) and no runner, and the build check passed, so not one scenario ran. Where
+    # such files go is the framework's business; the agent must check that its test command finds and runs them.
+    project = _project(tmp_path)
+    created = conversation(edit=_writes_feature(project), answer="Wrote a feature.")
+    agent = TestGeneratorAgent(LlmConfigModel(model="openai/gpt-4o"), max_iterations=5)
+    testng = FACT_SHEET.model_copy(update={"bdd_tool": _fact(None), "feature_file_count": 0})
+
+    agent.generate(LocalWorkspace(working_dir=str(project)), project, DATA, testng, FINDINGS, COMMAND,
+                   instructions="Write the new tests as Cucumber BDD feature files with step definitions.")
+
+    head, rules = created[0].messages[0].split("How to work", 1)
+    assert "Write the new tests as Cucumber BDD feature files" in head  # the user's instructions come first
+    assert "Put your new test files only in a new folder named 'ngauto'" in rules
+    assert "Every other file you need goes where this framework expects it" in rules
+    assert "the project's own test command would find and run your new tests" in rules
+    assert "src/test" not in rules and "Class names end with" not in rules  # no Maven recipe
 
 
 def test_the_users_instructions_come_before_the_rules_in_every_batch(

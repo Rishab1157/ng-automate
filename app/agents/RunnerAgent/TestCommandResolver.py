@@ -65,6 +65,10 @@ JUNIT_RESULT = f"{RESULTS_DIR}/junit.xml"
 # unset (the display could not start), so the tests then run headless instead of failing.
 HEADED = "${DISPLAY:+--headed}"
 DEFAULT_WDIO_CONFIG = "wdio.conf.js"
+# The project's own Gradle wrapper, made executable first when it is not (a zip or a clone can lose the bit; a project
+# mounted from a Windows host is executable already and refuses chmod). The sandbox images have no `gradle`: it is
+# only the fallback for a project without a wrapper.
+GRADLE_WRAPPER = "{ [ -x gradlew ] || chmod +x gradlew; } && ./gradlew"
 
 
 class UnsupportedStackError(ValidationError):
@@ -78,10 +82,9 @@ def resolve_test_command(
     """The command that runs the project's tests (all of them, the selector's, or just the given test files), with the
     setup that installs the project's declared dependencies first where its build tool does not (Python, Node)."""
     command = _test_command(fact_sheet, test_selector, test_files)
-    markers = {marker.rsplit("/", 1)[-1] for marker in fact_sheet.marker_files}
     return command.model_copy(update={
         "setup": _setup_command(fact_sheet, command.tool),
-        "check": _check_command(command.tool, "gradlew" in markers),
+        "check": _check_command(command.tool, _has_gradle_wrapper(fact_sheet)),
     })
 
 
@@ -96,14 +99,13 @@ def _test_command(
     frameworks = _values(fact_sheet.test_frameworks.value)
     tools = _values(fact_sheet.automation_tools.value)
     bdd = _first(fact_sheet.bdd_tool.value)
-    markers = {marker.rsplit("/", 1)[-1] for marker in fact_sheet.marker_files}
 
     if "UFT" in tools:
         raise UnsupportedStackError(UNSUPPORTED_UFT)
     if build_tool == "Maven":
         return _maven(selector, bdd == "Cucumber", files)
     if build_tool == "Gradle":
-        return _gradle(selector, "gradlew" in markers, files)
+        return _gradle(selector, _has_gradle_wrapper(fact_sheet), files)
     paths = " ".join(_quoted(path) for path in files) if files else (_quoted(selector) if selector else "")
     if "pytest" in frameworks:
         return _pytest(selector, headed="pytest-playwright" in frameworks, paths=paths if files else None)
@@ -161,10 +163,15 @@ def _setup_command(fact_sheet: FactSheetModel, tool: str) -> str | None:
     return None
 
 
+def _has_gradle_wrapper(fact_sheet: FactSheetModel) -> bool:
+    """At the project root, where the commands run (the fact sheet records it, see FactSheetCollector.LAUNCHER_FILES)."""
+    return "gradlew" in fact_sheet.marker_files
+
+
 def _check_command(tool: str, has_gradle_wrapper: bool) -> str | None:
     """Builds the tests without running them: compile errors, syntax and import errors show in seconds."""
     if tool == "gradle":
-        return f"{'./gradlew' if has_gradle_wrapper else 'gradle'} testClasses --no-daemon -q"
+        return f"{GRADLE_WRAPPER if has_gradle_wrapper else 'gradle'} testClasses --no-daemon -q"
     return _CHECK_COMMANDS.get(tool)
 
 
@@ -188,7 +195,7 @@ def _maven(selector: str | None, cucumber: bool, files: list[str] | None = None)
 
 
 def _gradle(selector: str | None, has_wrapper: bool, files: list[str] | None = None) -> TestCommandModel:
-    command = f"{'./gradlew' if has_wrapper else 'gradle'} test --no-daemon"
+    command = f"{GRADLE_WRAPPER if has_wrapper else 'gradle'} test --no-daemon"
     if files:
         for path in files:
             if path.endswith(".feature"):

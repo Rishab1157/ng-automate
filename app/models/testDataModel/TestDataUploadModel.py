@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.models.tokenUsageModel import TokenUsageModel
+
 from .TestDataModel import TestDataFormat, TestDataSetModel, TestDataStatus
 
 
@@ -24,5 +26,9 @@ class TestDataUploadModel(BaseModel):
     data_set: TestDataSetModel | None = None  # set once ready
     case_count: int
     error: str | None = None  # why reading the source failed
+    # Tokens the LLM used to read a free-form source (the last reading); None for our own format.
+    token_usage: TokenUsageModel | None = None
+    # Counts the editor's saves: a reading of an older version of the source is not written over a newer one.
+    revision: int = 0
     created_at: datetime
     updated_at: datetime

@@ -10,12 +10,13 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from app.core.exceptions import ErrorMessages, NgAutomateException, NotFoundError
-from app.models.testDataModel import TestDataFormat, TestDataSetModel, TestDataStatus
+from app.models.testDataModel import TestDataStatus
 from app.utils.AgentLibraries import load_agent_libraries
 
 if TYPE_CHECKING:
     from app.agents.TestGeneratorAgent.TestCaseExtractor import TestCaseExtractor
     from app.models.llmModel import LlmConfigModel
+    from app.models.tokenUsageModel import TokenUsageModel
     from app.services.modelConnectionService import ModelConnectionService
 
     from .TestDataService import TestDataService
@@ -93,35 +94,52 @@ class TestDataProcessor:
 
     async def _process(self, test_data_id: str) -> None:
         async with self._concurrency_slots():
-            try:
-                upload = await self.test_data_service.get_by_id(test_data_id)
-            except NotFoundError:
-                return
-            if upload.status != TestDataStatus.PROCESSING or upload.raw_source is None:
-                return
-            try:
-                llm_config = await self.model_connection_service.get_llm_config(upload.model_connection_id, upload.org_id)
-                data_set = await asyncio.to_thread(self._extract, llm_config, upload.raw_source, upload.source_format)
-            except asyncio.CancelledError:
-                raise  # stays processing: read again on the next start
-            except NgAutomateException as error:
-                await self.test_data_service.mark_failed(test_data_id, error.message)
-            except ValueError as error:
-                await self.test_data_service.mark_failed(
-                    test_data_id, ErrorMessages.TEST_DATA_READ_FAILED.format(reason=str(error))
-                )
-            except Exception:
-                logger.exception("Reading test data %s failed unexpectedly", test_data_id)
-                await self.test_data_service.mark_failed(test_data_id, ErrorMessages.INTERNAL_ERROR)
-            else:
-                await self.test_data_service.mark_ready(test_data_id, data_set)
+            # The editor can save a newer version of the source while one is read: its reading is then not written,
+            # and the newer version is read next.
+            while await self._read(test_data_id) is False:
+                logger.info("Test data %s changed while it was read: reading the new version", test_data_id)
 
-    def _extract(self, llm_config: "LlmConfigModel", text: str, source_format: TestDataFormat) -> TestDataSetModel:
+    async def _read(self, test_data_id: str) -> bool:
+        """Read the source once. False when it changed meanwhile (nothing was written)."""
+        try:
+            upload = await self.test_data_service.get_by_id(test_data_id)
+        except NotFoundError:
+            return True
+        if upload.status != TestDataStatus.PROCESSING or upload.raw_source is None:
+            return True
+        service = self.test_data_service
+        extractor: "TestCaseExtractor | None" = None
+        try:
+            llm_config = await self.model_connection_service.get_llm_config(upload.model_connection_id, upload.org_id)
+            extractor = await asyncio.to_thread(self._new_extractor, llm_config)
+            data_set = await asyncio.to_thread(extractor.extract, upload.raw_source, upload.source_format)
+        except asyncio.CancelledError:
+            raise  # stays processing: read again on the next start
+        except NgAutomateException as error:
+            return await service.mark_failed(
+                test_data_id, error.message, upload.revision, token_usage=_token_usage(test_data_id, extractor)
+            )
+        except ValueError as error:
+            reason = ErrorMessages.TEST_DATA_READ_FAILED.format(reason=str(error))
+            return await service.mark_failed(
+                test_data_id, reason, upload.revision, token_usage=_token_usage(test_data_id, extractor)
+            )
+        except Exception:
+            logger.exception("Reading test data %s failed unexpectedly", test_data_id)
+            return await service.mark_failed(
+                test_data_id, ErrorMessages.INTERNAL_ERROR, upload.revision,
+                token_usage=_token_usage(test_data_id, extractor),
+            )
+        return await service.mark_ready(
+            test_data_id, data_set, upload.revision, token_usage=_token_usage(test_data_id, extractor)
+        )
+
+    def _new_extractor(self, llm_config: "LlmConfigModel") -> "TestCaseExtractor":
         # In the worker thread: the first use imports the LLM libraries, which would stall the event loop. They load
         # through the one guarded loader, never at the same time as the startup preload (that can deadlock).
         if self._extractor_factory is None:
             load_agent_libraries()
-        return self.extractor_factory(llm_config).extract(text, source_format)
+        return self.extractor_factory(llm_config)
 
     def _concurrency_slots(self) -> asyncio.Semaphore:
         # asyncio primitives belong to one event loop, and tests start several loops in one process.
@@ -136,6 +154,14 @@ class TestDataProcessor:
             del self._tasks[test_data_id]
         if not task.cancelled() and (error := task.exception()) is not None:
             logger.error("Test data %s stopped with an unexpected error", test_data_id, exc_info=error)
+
+
+def _token_usage(test_data_id: str, extractor: "TestCaseExtractor | None") -> "TokenUsageModel | None":
+    """What the reading's LLM calls used (logged), or None when nothing was counted."""
+    usage = getattr(extractor, "token_usage", None)
+    if usage is not None:
+        logger.info("Reading test data %s used tokens: %s", test_data_id, usage.describe())
+    return usage
 
 
 test_data_processor = TestDataProcessor()
