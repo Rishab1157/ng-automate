@@ -6,6 +6,7 @@ comes from users (a test class, file or Cucumber tag expression): it is validate
 
 import re
 import shlex
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 
@@ -16,7 +17,10 @@ from app.models.testRunModel import TestCommandModel
 RESULTS_DIR = "ngauto-results"
 _SELECTOR_PATTERN = re.compile(r"^(?!-)[A-Za-z0-9_.:/@#*,\- ]{1,200}$")
 MAX_TEST_FILES = 200
-_TEST_FILE_PATH = re.compile(r"^(?![-/])[A-Za-z0-9_.@/\- ]{1,300}$")
+MAX_TEST_FILE_PATH_CHARS = 300
+# Besides letters, marks and digits of any script ("TD_001_सही_लॉगिन.java": a test named after a Hindi case title),
+# the only characters a chosen test file's path may have. Never a shell sign or a control character.
+_TEST_FILE_PATH_SIGNS = frozenset("_.@/- ")
 # Files a test runner picks up: Surefire's default class names, Cucumber features, pytest, JavaScript specs, Robot.
 _JVM_TEST_NAME = re.compile(r"(^Test\w*|\w*(Test|Tests|TestCase))\.(java|kt)$")
 _OTHER_TEST_NAME = re.compile(r"\.feature$|^test_.*\.py$|_test\.py$|\.(spec|test|cy)\.(ts|tsx|js|jsx|mjs|cjs)$|\.robot$")
@@ -258,11 +262,21 @@ def check_test_files(paths: list[str] | None) -> list[str] | None:
     files: list[str] = []
     for raw in paths:
         path = raw.replace("\\", "/").strip()
-        if not _TEST_FILE_PATH.match(path) or ".." in path.split("/") or "//" in path:
-            raise ValidationError(INVALID_TEST_FILE.format(path=raw[:300]))
+        if not _is_safe_path(path) or ".." in path.split("/") or "//" in path:
+            raise ValidationError(INVALID_TEST_FILE.format(path=raw[:MAX_TEST_FILE_PATH_CHARS]))
         if path not in files:
             files.append(path)
     return files
+
+
+def _is_safe_path(path: str) -> bool:
+    """Letters, marks and digits of any script and _TEST_FILE_PATH_SIGNS only, not starting with - or /. Python's \\w
+    is not enough: it leaves out marks, such as the vowel signs of Devanagari. Commands quote the paths as well."""
+    return (
+        0 < len(path) <= MAX_TEST_FILE_PATH_CHARS
+        and not path.startswith(("-", "/"))
+        and all(char in _TEST_FILE_PATH_SIGNS or unicodedata.category(char)[0] in "LMN" for char in path)
+    )
 
 
 def _wdio_config(marker_files: list[str]) -> str:

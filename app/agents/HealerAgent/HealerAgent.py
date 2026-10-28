@@ -41,17 +41,16 @@ from app.models.runModel import RunEventLevel, RunEventType
 from app.models.testRunModel import TestCommandModel, TestRunResultModel
 from app.utils.AgentConversationUtils import (
     LAST_STEPS_SUMMARY,
-    MODEL_UNREACHABLE_FROM_SANDBOX,
     AgentControl,
     EventForwarder,
     ask,
     build_condenser,
-    check_model_reachable,
+    check_model,
     close_conversation,
     describe_last_steps,
     secret_values,
 )
-from app.utils.LlmInstance import build_llm, sandbox_base_url
+from app.utils.LlmInstance import build_llm
 from app.utils.ProjectSnapshot import ProjectSnapshot
 
 logger = logging.getLogger(__name__)
@@ -116,10 +115,9 @@ class HealerAgent:
         """
         started = time.monotonic()
         paused_before = control.paused_seconds if control is not None else 0.0
-        unreachable = check_model_reachable(workspace, sandbox_base_url(self.llm_config.base_url))
-        if unreachable is not None:
-            reason = MODEL_UNREACHABLE_FROM_SANDBOX.format(reason=unreachable)
-            return HealOutcomeModel(summary=NO_SUMMARY, error=_heal_failed(reason).message,
+        problem = check_model(workspace, self.llm_config)
+        if problem is not None:
+            return HealOutcomeModel(summary=NO_SUMMARY, error=_heal_failed(problem).message,
                                     seconds=time.monotonic() - started)
         snapshot = ProjectSnapshot.capture(project_dir)
         forwarder = EventForwarder(on_event, secret_values(self.llm_config))

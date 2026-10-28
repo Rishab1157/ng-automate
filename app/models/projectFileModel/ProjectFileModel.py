@@ -1,4 +1,5 @@
 from enum import Enum
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -39,6 +40,14 @@ class RunFilesModel(BaseModel):
     project: list[FileNodeModel] = Field(default_factory=list)
     changes: list[FileChangeModel] = Field(default_factory=list)
     truncated: bool = False
+
+
+class ProjectDownloadModel(BaseModel):
+    """The whole project as a zip made for one download, in a temporary folder of its own (removed once sent)."""
+
+    folder: Path
+    path: Path  # the zip, inside `folder`
+    filename: str  # the name the user's browser saves it as
 
 
 class FileContentModel(BaseModel):

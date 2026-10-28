@@ -1,3 +1,10 @@
-from .ProjectFileModel import FileContentModel, FileNodeModel, FileTreeModel, ProjectFileRoot, RunFilesModel
+from .ProjectFileModel import (
+    FileContentModel,
+    FileNodeModel,
+    FileTreeModel,
+    ProjectDownloadModel,
+    ProjectFileRoot,
+    RunFilesModel,
+)
 
-__all__ = ["ProjectFileRoot", "FileNodeModel", "FileTreeModel", "FileContentModel", "RunFilesModel"]
+__all__ = ["ProjectFileRoot", "FileNodeModel", "FileTreeModel", "FileContentModel", "RunFilesModel", "ProjectDownloadModel"]

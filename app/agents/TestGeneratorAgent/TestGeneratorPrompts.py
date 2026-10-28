@@ -13,7 +13,7 @@ from app.agents.TestGeneratorAgent.GeneratedTestPlacement import GENERATED_DIR, 
 from app.models.analyzerModel import AnalyzerFindingsModel, FactModel, FactSheetModel
 from app.models.testDataModel import TestCaseSpecModel, TestStepModel
 from app.models.testRunModel import TestCommandModel
-from app.utils.AgentPromptRules import PLAIN_TOOL_VALUES_RULE, VISIBLE_BROWSER_RULE, user_instructions_block
+from app.utils.AgentPromptRules import PLAIN_TOOL_VALUES_RULE, TERMINAL_RULE, VISIBLE_BROWSER_RULE, user_instructions_block
 
 MAX_IMPORTANT_PATHS = 12
 
@@ -45,8 +45,20 @@ How to work (the project decides the details: look them up in it, do not assume 
   the project and the files you wrote (in earlier batches too) for one that already does it, and call it. Write what
   several of your tests need (for example logging in) once, as shared code of your own, organised the way this
   project organises such code. Never copy the same code into several files or write again what already exists.
-- One test per case, named after the case id (exactly as given, e.g. TD-001) and its title, in a form the runner
-  collects. Write tests only for the cases listed here, and never a second test for a case that already has one.
+- Never invent the project's API: every class, function, method, field, property and parameter you call or assign must
+  be one you have actually read, with its real name and the real arguments it takes, and it must come from where it
+  really is (imported from its own file). Never guess a setter, getter, constructor or factory: search the project for
+  what exists and use that. If the project already has a base class, fixture, page object, runner or helper, import and
+  extend or call that one; never write a new file that gives a class the same role or the same name as one the project
+  already has (that hides the real one), and never redefine an existing class under your own folder.
+- One test per case, named after the case id and its title, in a form the runner collects. Name each new test file
+  (and its class) the way the project's normal test command finds tests, as its existing tests are named, so that a
+  plain run of all its tests runs yours too. Use only ASCII letters, digits, `_`, `-` and `.` in the names of new
+  files, folders, classes and tests (translate or transliterate a title in another script). A case id can hold
+  characters the language does not allow in a name (a hyphen, for example): keep the id recognisable in the file and
+  in the test's own name, but write it in a form the language accepts (replace the characters it does not allow with
+  `_`). Exactly one test and one file per case, under exactly one name: never write a second file, class, function or
+  test for a case that already has one. Write tests only for the cases listed here.
 - You may change the project's own files where your tests need it (add a page-object method, a step definition, an
   export); such changes are kept, so keep every existing test working: add instead of rewriting, never delete a
   project file, never change a locator or method the existing tests use, and never remove or weaken a test, step or
@@ -82,10 +94,12 @@ How to work (the project decides the details: look them up in it, do not assume 
   line numbers `view` shows into a file. A badly broken file of your own: `rm` it, then `create` it again whole (never a
   project file). No edits with shell commands, no backup copies, no git.
 - Your sandbox has internet access and sudo works: install what your tests need yourself (the project's own install
-  command first) and keep downloads out of /workspace/project.
+  command first). Put downloads, temporary files and saved command output (`| tee`, `> file`) outside the project
+  (for example in /tmp), never in /workspace/project.
 - {check_rule}
 - Keep working until all files are written; do not stop to explain your plan.
 - {plain_values}
+- {terminal_rule}
 
 When you are done, reply with a short summary: each file you created or changed (with the case ids it covers), the
 existing code you reused, and the shared code you added."""
@@ -162,6 +176,7 @@ def build_generate_prompt(
         marker=UNVERIFIED_MARKER,
         check_rule=_CHECK_RULE.format(check=command.check) if command.check else _NO_CHECK_RULE,
         plain_values=PLAIN_TOOL_VALUES_RULE,
+        terminal_rule=TERMINAL_RULE,
     )
 
 

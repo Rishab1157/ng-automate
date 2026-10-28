@@ -8,9 +8,12 @@ Each run works on its own copy in <DATA_DIR>/runs/<run_id>/ (see SandboxService)
 Moving to S3 later only changes this class.
 """
 
+import logging
 import re
 import shutil
-from collections.abc import AsyncIterator
+import threading
+import time
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 
 from bson import ObjectId
@@ -19,10 +22,16 @@ from app.config import settings
 from app.core.exceptions import ErrorMessages, PayloadTooLargeError
 from app.utils.ArchiveUtils import extract_archive
 
+logger = logging.getLogger(__name__)
+
 RUNS_DIR = "runs"
 MAX_STORED_NAME_CHARS = 150
 # Characters Windows and most tools do not accept in a file name.
 _UNSAFE_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# Windows refuses to rename a folder while any program has a file in it open, and an antivirus scans the files just
+# unpacked for a few seconds. A refused rename is tried again after each of these waits (seconds); the first try is
+# at once, the last error is the real one.
+RENAME_RETRY_WAITS: tuple[float, ...] = (2, 3, 5, 7)
 
 
 class ProjectStorageService:
@@ -57,14 +66,18 @@ class ProjectStorageService:
         working = self.working_dir(project_id)
         if working.is_dir():
             return working
-        partial = working.with_name(working.name + ".partial")
-        shutil.rmtree(partial, ignore_errors=True)
-        try:
-            extract_archive(self.archive_path(project_id), partial, self.max_bytes)
-            partial.rename(working)
-        except BaseException:
+        # One request at a time unpacks a project: another one would clear the folder the first is about to rename.
+        with _unpack_lock(project_id):
+            if working.is_dir():  # unpacked by the request this one waited for
+                return working
+            partial = working.with_name(working.name + ".partial")
             shutil.rmtree(partial, ignore_errors=True)
-            raise
+            try:
+                extract_archive(self.archive_path(project_id), partial, self.max_bytes)
+                _rename_when_free(partial, working)
+            except BaseException:
+                shutil.rmtree(partial, ignore_errors=True)
+                raise
         return working
 
     def save_test_data_file(self, project_id: str, filename: str, content: bytes) -> str:
@@ -126,6 +139,27 @@ class ProjectStorageService:
 
     def _project_dir(self, project_id: str) -> Path:
         return self.root / "projects" / project_id
+
+
+_UNPACK_LOCKS: dict[str, threading.Lock] = {}
+_UNPACK_LOCKS_GUARD = threading.Lock()
+
+
+def _unpack_lock(project_id: str) -> threading.Lock:
+    with _UNPACK_LOCKS_GUARD:
+        return _UNPACK_LOCKS.setdefault(project_id, threading.Lock())
+
+
+def _rename_when_free(source: Path, target: Path, waits: Sequence[float] | None = None) -> None:
+    """Rename source to target, trying again after each wait while Windows refuses because a file inside is in use."""
+    for wait in RENAME_RETRY_WAITS if waits is None else waits:
+        try:
+            source.rename(target)
+            return
+        except PermissionError as error:
+            logger.info("%s is in use (%s): trying the rename again in %s s", source, error, wait)
+            time.sleep(wait)
+    source.rename(target)
 
 
 def _safe_name(filename: str) -> str:

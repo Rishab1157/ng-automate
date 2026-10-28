@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
+from app.config import settings
 from app.models.llmModel import LlmConfigModel
 from app.utils import StructuredOutput
 from app.utils.StructuredOutput import complete_json
@@ -91,3 +92,54 @@ def test_all_provider_errors_raise_without_the_key(fake) -> None:
 
     assert "sk-very-secret-key" not in str(raised.value)
     assert "RuntimeError" in str(raised.value)
+
+
+# ---------- rate limits (HTTP 429) ----------
+
+def _rate_limit(message: str = "rate limit reached for requests") -> Exception:
+    from litellm.exceptions import RateLimitError
+
+    return RateLimitError(message, llm_provider="openai", model="gpt-4o")
+
+
+@pytest.fixture
+def pauses(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """The pauses complete_json makes, without waiting. Only this module's sleep: never time.sleep, which the threads
+    of other tests use too."""
+    made: list[float] = []
+    monkeypatch.setattr(StructuredOutput, "sleep", made.append)
+    return made
+
+
+def test_a_rate_limited_call_is_tried_again_after_the_agents_pauses(fake, pauses: list[float]) -> None:
+    # A gateway's 429 was tried again at once, so it failed again: it now waits as the agents' model calls do.
+    llm = fake(_rate_limit(), _rate_limit(), '{"x": 4}')
+
+    assert complete_json(CONFIG, "i", "t", "thing", SCHEMA, _parse, attempts=1) == 4
+
+    assert len(llm.calls) == 3
+    assert pauses == [
+        min(settings.LLM_RETRY_MIN_WAIT_SECONDS * 2 ** n, settings.LLM_RETRY_MAX_WAIT_SECONDS) for n in range(2)
+    ]
+
+
+def test_a_rate_limit_that_lasts_gives_up_after_the_agents_tries(fake, pauses: list[float]) -> None:
+    llm = fake(*[_rate_limit() for _ in range(2 * settings.LLM_NUM_RETRIES)])
+
+    with pytest.raises(ValueError, match="RateLimitError"):
+        complete_json(CONFIG, "i", "t", "thing", SCHEMA, _parse, attempts=2)
+
+    # No second round right after the last try: that would be the immediate retry again.
+    assert len(llm.calls) == settings.LLM_NUM_RETRIES
+    assert len(pauses) == settings.LLM_NUM_RETRIES - 1 and max(pauses) <= settings.LLM_RETRY_MAX_WAIT_SECONDS
+
+
+def test_other_errors_and_a_used_up_quota_are_not_waited_for(fake, pauses: list[float]) -> None:
+    fake(RuntimeError("connection reset"), '{"x": 1}')
+    assert complete_json(CONFIG, "i", "t", "thing", SCHEMA, _parse, attempts=2) == 1
+
+    llm = fake(_rate_limit("You exceeded your current quota: insufficient_quota"), '{"x": 2}')
+    with pytest.raises(ValueError, match="RateLimitError"):
+        complete_json(CONFIG, "i", "t", "thing", SCHEMA, _parse, attempts=2)
+
+    assert pauses == [] and len(llm.calls) == 1  # waiting cannot bring a used-up quota back

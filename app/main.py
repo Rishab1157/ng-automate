@@ -89,6 +89,8 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    # The browser lets the QXcel UI read a download's file name only when the header is exposed.
+    expose_headers=["Content-Disposition"],
 )
 
 app.include_router(api_router)

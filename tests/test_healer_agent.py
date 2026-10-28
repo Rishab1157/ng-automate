@@ -35,6 +35,8 @@ from app.models.healerModel import FileChangeModel, GuardViolationModel, HealOut
 from app.models.llmModel import LlmConfigModel
 from app.models.runModel import RunEventType
 from app.models.testRunModel import FailureClassificationModel, FailureKind, TestCommandModel, TestRunResultModel
+from app.utils.AgentPromptRules import TERMINAL_RULE
+from app.utils.LlmInstance import MODEL_NOT_ANSWERING
 
 healer_module = importlib.import_module("app.agents.HealerAgent.HealerAgent")
 
@@ -196,6 +198,30 @@ def test_the_users_instructions_come_right_before_the_rules_only_when_given() ->
     assert prompt.index("Key lines:") < prompt.index(USER_BLOCK_HEADER)
     for nothing in ((), ["", "  "]):
         assert "The user's instructions" not in build_heal_prompt(_result(), COMMAND, FACT_SHEET, instructions=nothing)
+
+
+def test_a_model_that_does_not_answer_stops_the_heal_before_it_starts(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created = conversation()
+    monkeypatch.setattr(healer_module, "check_model", lambda workspace, config: MODEL_NOT_ANSWERING.format(seconds=90))
+
+    outcome = _heal(_project(tmp_path))
+
+    assert outcome.error == f"The healer stopped: {MODEL_NOT_ANSWERING.format(seconds=90)}"
+    assert created == [] and outcome.changes == []
+
+
+def test_scratch_output_is_kept_out_of_the_project() -> None:
+    # A real run: an agent ran its build as `... | tee result.txt` and left result.txt in the project root.
+    flat = " ".join(build_heal_prompt(_result(), COMMAND, FACT_SHEET).split())
+
+    assert "saved command output (`| tee`, `> file`) outside the project (for example in /tmp)" in flat
+
+
+def test_the_healer_is_told_the_terminal_can_check_an_answer_that_looks_wrong() -> None:
+    # A real run: the grep tool answered "No files found" for files that were there, and the agent believed it.
+    assert TERMINAL_RULE in build_heal_prompt(_result(), COMMAND, FACT_SHEET)
 
 
 def test_the_quicker_check_is_offered_only_when_the_project_has_one() -> None:

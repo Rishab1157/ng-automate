@@ -18,14 +18,37 @@ CMD_OUTPUT_METADATA_PS1_REGEX: Final[re.Pattern[str]] = re.compile(
 MAX_CMD_OUTPUT_SIZE: Final[int] = 30000
 
 
-# Common timeout message that can be used across different timeout scenarios
+# Common timeout message that can be used across different timeout scenarios: what
+# the model can do about a command that is still running.
 TIMEOUT_MESSAGE_TEMPLATE: Final[str] = (
-    "You may wait longer to see additional output by sending empty command '', "
-    "send other commands to interact with the current process, send keys "
-    '("C-c", "C-z", "C-d") '
-    "to interrupt/kill the previous command before sending your new command, "
-    "or use the timeout parameter in terminal for future commands."
+    "Send an empty command '' to wait for more output, or send input or keys to it "
+    "with is_input=true (`C-c` stops it); a new command runs only after it has "
+    "ended. Run long commands with a larger `timeout` (in seconds)."
 )
+
+# NG Automate: the same for a pooled terminal (TerminalExecutor with tmux), which
+# stops a command that is still running before it runs the next one there (see
+# TerminalExecutor._prepare_pooled_session). Waiting with '' or sending keys there
+# only failed with "No previous running command ...".
+POOLED_TIMEOUT_MESSAGE: Final[str] = (
+    "It cannot be waited for or answered: it is stopped (C-c) before its terminal "
+    "runs another command. If it needs more time, run it again with a larger "
+    "`timeout` (in seconds); if it waits for input, give the input in the command."
+)
+
+# NG Automate: what bash's own exit codes for a command it could not run mean.
+EXIT_CODE_HINTS: Final[dict[int, str]] = {
+    126: (
+        "Exit code 126: a command was found but could not run (it is not "
+        "executable, or it is a folder). Run a script through its interpreter (for "
+        "example `sh ./script.sh`), or check the file with `ls -l`."
+    ),
+    127: (
+        "Exit code 127: the shell found no command with that name (it is "
+        "misspelled, or the program is not installed or not on PATH). Check the "
+        "name in the output above; `command -v NAME` shows whether it is installed."
+    ),
+}
 
 # How long to wait with no new output before considering it a no-change timeout
 NO_CHANGE_TIMEOUT_SECONDS: Final[int] = 30

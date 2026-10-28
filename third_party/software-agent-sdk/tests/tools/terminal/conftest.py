@@ -50,6 +50,7 @@ def get_no_change_timeout_suffix(timeout_seconds):
     """Helper function to generate the expected no-change timeout suffix."""
     return (
         f"\n[The command has no new output after {timeout_seconds} seconds. "
+        f"It may still be working, or be waiting for input. "
         f"{TIMEOUT_MESSAGE_TEMPLATE}]"
     )
 

@@ -36,16 +36,15 @@ from app.models.llmModel import LlmConfigModel
 from app.models.runModel import RunEventLevel, RunEventType
 from app.models.tokenUsageModel import TokenUsageModel
 from app.utils.AgentConversationUtils import (
-    MODEL_UNREACHABLE_FROM_SANDBOX,
     AgentControl,
     EventForwarder,
     ask,
     build_condenser,
-    check_model_reachable,
+    check_model,
     close_conversation,
     secret_values,
 )
-from app.utils.LlmInstance import build_llm, sandbox_base_url
+from app.utils.LlmInstance import build_llm
 from app.utils.StructuredOutput import complete_json
 
 logger = logging.getLogger(__name__)
@@ -134,9 +133,9 @@ class AnalyzerAgent:
         An answer is strictly validated. If it is not usable, the agent corrects it (up to `repair_attempts` rounds,
         each told the exact error), then a schema-constrained formatter is the last resort.
         """
-        unreachable = check_model_reachable(workspace, sandbox_base_url(self.llm_config.base_url))
-        if unreachable is not None:
-            raise _analysis_failed(MODEL_UNREACHABLE_FROM_SANDBOX.format(reason=unreachable))
+        problem = check_model(workspace, self.llm_config)
+        if problem is not None:
+            raise _analysis_failed(problem)
         forwarder = EventForwarder(on_event, secret_values(self.llm_config))
         conversation = Conversation(
             agent=self._build_agent(),

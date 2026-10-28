@@ -27,6 +27,13 @@ PLAIN_TOOL_VALUES_RULE = (
     '"**/pages/**".'
 )
 
+# A tool can be wrong without failing: the grep tool once answered "No files found" for files that were there, and the
+# agents believed it and guessed code. The terminal is the check. Only for agents that have one (not the analyzer).
+TERMINAL_RULE = (
+    "You have a terminal: use it for anything your other tools cannot do, and to check an answer that looks wrong "
+    "(for example, search again with grep or find when a search finds nothing you expected)."
+)
+
 # The sandbox runs browsers on a virtual screen that the user watches live (the live view): a headless browser shows
 # nothing there. How a browser is made visible and maximized depends on the framework, so the agent finds out how
 # this project starts its browser.

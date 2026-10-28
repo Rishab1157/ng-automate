@@ -5,7 +5,7 @@ GIT_DEFAULT_BRANCH ("main"); a repo that has no such branch (older repos use "ma
 default branch. A branch the connection names explicitly must exist: falling back would test the wrong code.
 
 The token reaches git only through environment variables, so it never appears in the
-URL, the command line, .git/config, logs or error messages.
+URL, the command line, .git/config, logs or error messages. GitPushService works the same way, with the helpers below.
 """
 
 import base64
@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -43,11 +44,11 @@ class GitFetchService:
 
     def fetch_to_archive(self, source: GitCloneSourceModel, destination: Path, max_bytes: int) -> GitFetchResultModel:
         """Clone the connection's branch of its repo and save it as a zip at `destination`."""
-        _check_repo_url(source.repo_url)
+        check_repo_url(source.repo_url)
         if source.branch is not None:
-            _check_branch(source.branch)
-        token = _secret(source.token)
-        env = _git_env(token, source.provider_code)
+            check_branch(source.branch)
+        token = secret_value(source.token)
+        env = git_env(token, source.provider_code)
 
         with tempfile.TemporaryDirectory(prefix="ngauto-clone-", ignore_cleanup_errors=True) as tmp:
             repo_dir = Path(tmp) / "repo"
@@ -78,21 +79,29 @@ class GitFetchService:
         ).strip()
 
     def _run_git(self, args: list[str], env: dict[str, str], token: str | None, branch: str) -> str:
-        # credential.helper= : never use credentials stored on this machine, only the connection's token.
-        command = ["git", "-c", "credential.helper=", "-c", "core.symlinks=false", *args]
-        try:
-            result = subprocess.run(
-                command, env=env, capture_output=True, encoding="utf-8", errors="replace",
-                timeout=self.timeout_seconds, check=False,
-            )
-        except subprocess.TimeoutExpired:
-            raise GitFetchError(ErrorMessages.GIT_TIMEOUT.format(seconds=self.timeout_seconds)) from None
+        result = run_git(args, env, self.timeout_seconds, GitFetchError)
         if result.returncode != 0:
-            message = _describe_failure(result.stderr, token, branch)
+            message = describe_failure(result.stderr, token, branch)
             if message == ErrorMessages.GIT_BRANCH_NOT_FOUND.format(branch=branch):
                 raise _BranchNotFoundError(message)
             raise GitFetchError(message)
         return result.stdout
+
+
+def run_git(
+    args: list[str], env: dict[str, str], timeout_seconds: int, error: Callable[[str], Exception]
+) -> subprocess.CompletedProcess[str]:
+    """Run one git command; taking longer than `timeout_seconds` raises `error`. A failed command is returned: the
+    caller describes it (describe_failure), so nothing in it reaches users unscrubbed."""
+    # credential.helper= : never use credentials stored on this machine, only the connection's token.
+    command = ["git", "-c", "credential.helper=", "-c", "core.symlinks=false", *args]
+    try:
+        return subprocess.run(
+            command, env=env, capture_output=True, encoding="utf-8", errors="replace",
+            timeout=timeout_seconds, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise error(ErrorMessages.GIT_TIMEOUT.format(seconds=timeout_seconds)) from None
 
 
 def _clone_args(repo_url: str, repo_dir: Path, branch: str | None) -> list[str]:
@@ -104,43 +113,58 @@ def _clone_args(repo_url: str, repo_dir: Path, branch: str | None) -> list[str]:
     ]
 
 
-def _check_repo_url(repo_url: str) -> None:
+def check_repo_url(repo_url: str, error: Callable[[str], Exception] = GitFetchError) -> None:
     """Only remote https repos: file://, local paths or ssh could expose the server's own files."""
     parts = urlsplit(repo_url)
     if parts.scheme != "https" or not parts.hostname:
-        raise GitFetchError(ErrorMessages.GIT_ONLY_HTTPS)
+        raise error(ErrorMessages.GIT_ONLY_HTTPS)
     if parts.username or parts.password:
-        raise GitFetchError(ErrorMessages.GIT_CREDENTIALS_IN_URL)
+        raise error(ErrorMessages.GIT_CREDENTIALS_IN_URL)
 
 
-def _check_branch(branch: str) -> None:
+def check_branch(branch: str, error: Callable[[str], Exception] = GitFetchError) -> None:
     if not _BRANCH_PATTERN.match(branch):
-        raise GitFetchError(ErrorMessages.GIT_INVALID_BRANCH.format(branch=branch))
+        raise error(ErrorMessages.GIT_INVALID_BRANCH.format(branch=branch))
 
 
-def _secret(value: SecretStr | None) -> str | None:
+def secret_value(value: SecretStr | None) -> str | None:
     return value.get_secret_value() if value else None
 
 
-def _git_env(token: str | None, provider_code: str | None) -> dict[str, str]:
+def git_env(token: str | None, provider_code: str | None) -> dict[str, str]:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"  # never hang waiting for a password
     env["GCM_INTERACTIVE"] = "never"  # Git Credential Manager (Windows): no pop-ups
+    # Git's tracing can write the request headers (the token) to the output or to a file: never for these commands.
+    for name in [key for key in env if key.startswith("GIT_TRACE") or key == "GIT_CURL_VERBOSE"]:
+        del env[name]
     if token:
         username = _TOKEN_USERNAMES.get((provider_code or "").upper(), _DEFAULT_TOKEN_USERNAME)
-        basic = base64.b64encode(f"{username}:{token}".encode()).decode()
         env["GIT_CONFIG_COUNT"] = "1"
         env["GIT_CONFIG_KEY_0"] = "http.extraHeader"
-        env["GIT_CONFIG_VALUE_0"] = f"Authorization: Basic {basic}"
+        env["GIT_CONFIG_VALUE_0"] = f"Authorization: Basic {_basic_credentials(username, token)}"
     return env
 
 
-def _describe_failure(stderr: str, token: str | None, branch: str) -> str:
-    text = stderr.replace(token, "***") if token else stderr
+def scrub(text: str, token: str | None) -> str:
+    """`text` without the token, also in the encoded form git sends it in."""
+    if not token:
+        return text
+    for username in {*_TOKEN_USERNAMES.values(), _DEFAULT_TOKEN_USERNAME}:
+        text = text.replace(_basic_credentials(username, token), "***")
+    return text.replace(token, "***")
+
+
+def _basic_credentials(username: str, token: str) -> str:
+    return base64.b64encode(f"{username}:{token}".encode()).decode()
+
+
+def describe_failure(stderr: str, token: str | None, branch: str) -> str:
+    text = scrub(stderr, token)
     lowered = text.lower()
     if "authentication failed" in lowered or "403" in lowered or "401" in lowered:
         return ErrorMessages.GIT_AUTH_FAILED
-    if "remote branch" in lowered and "not found" in lowered:
+    if ("remote branch" in lowered and "not found" in lowered) or "couldn't find remote ref" in lowered:
         return ErrorMessages.GIT_BRANCH_NOT_FOUND.format(branch=branch)
     if "not found" in lowered:
         return ErrorMessages.GIT_REPO_NOT_FOUND

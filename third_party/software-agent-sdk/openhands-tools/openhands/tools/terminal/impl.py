@@ -13,7 +13,10 @@ from openhands.sdk.tool import ToolExecutor
 
 if TYPE_CHECKING:
     from openhands.sdk.conversation import LocalConversation
-from openhands.tools.terminal.constants import CMD_OUTPUT_PS1_END
+from openhands.tools.terminal.constants import (
+    CMD_OUTPUT_PS1_END,
+    POOLED_TIMEOUT_MESSAGE,
+)
 from openhands.tools.terminal.definition import (
     _LITERAL_ARG_HINT_TEMPLATE,
     TerminalAction,
@@ -215,6 +218,10 @@ class TerminalExecutor(ToolExecutor[TerminalAction, TerminalObservation]):
                 session = TerminalSession.attach_to_existing(
                     terminal, self._no_change_timeout_seconds
                 )
+                # NG Automate: a command still running after a timeout is stopped
+                # before the pane's next command (_prepare_pooled_session), so its
+                # timeout message must not say to wait for it.
+                session.timeout_message = POOLED_TIMEOUT_MESSAGE
                 self._sessions[pane_id] = session
             return self._sessions[pane_id]
 

@@ -21,5 +21,7 @@ class CurrentUserMapper:
             org_id=org_id,
             role_id=payload.get("role_id"),
             email=payload.get("email") or "",
+            firstname=str(payload.get("firstname") or "").strip(),
+            lastname=str(payload.get("lastname") or "").strip(),
             permissions=frozenset(permissions) if isinstance(permissions, list) else frozenset(),
         )

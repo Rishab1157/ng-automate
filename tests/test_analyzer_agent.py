@@ -19,6 +19,7 @@ from openhands.sdk.conversation.impl.remote_conversation import RemoteConversati
 from openhands.sdk.event import ActionEvent, AgentErrorEvent, MessageEvent, ObservationEvent, SystemPromptEvent
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.llm import Message, MessageToolCall, TextContent
+from openhands.sdk.llm.exceptions import LLMTimeoutError
 from openhands.sdk.tool.builtins.finish import FinishAction
 from openhands.sdk.workspace import LocalWorkspace
 from openhands.tools.file_editor import FileEditorAction, FileEditorObservation
@@ -55,6 +56,7 @@ from app.models.analyzerModel import (
 )
 from app.models.llmModel import LlmConfigModel
 from app.models.runModel import RunEventLevel, RunEventType
+from app.utils.LlmInstance import MODEL_NOT_ANSWERING
 
 # The module, not the class of the same name (a package re-export would shadow it on attribute access).
 analyzer_module = importlib.import_module("app.agents.AnalyzerAgent.AnalyzerAgent")
@@ -755,6 +757,9 @@ def test_model_failure_becomes_a_safe_analysis_error(
         (ConversationRunError("c1", TimeoutError("Run timed out after 3600 seconds")), AGENT_TIMED_OUT),
         (ConversationRunError("c1", RuntimeError("Connection error: cannot connect to host")), "could not be reached"),
         (_run_error("ZeroDivisionError", "division by zero"), "unexpected error"),
+        # A model call that got no answer in time is no network problem: the model is busy or stuck.
+        (_run_error("LLMTimeoutError", "LLM completion timed out after 300 seconds"), "did not answer in time"),
+        (ConversationRunError("c1", LLMTimeoutError("LLM completion timed out after 300 seconds")), "busy or stuck"),
     ],
 )
 def test_run_failures_have_clear_reasons(
@@ -768,6 +773,23 @@ def test_run_failures_have_clear_reasons(
 
     with pytest.raises(AnalysisError, match=reason):
         AnalyzerAgent(_llm_config()).analyze(LocalWorkspace(working_dir=str(tmp_path)), fact_sheet)
+
+
+def test_a_model_that_does_not_answer_stops_the_analysis_before_it_starts(
+    conversations: Callable[..., list[FakeConversation]],
+    fact_sheet: FactSheetModel,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A real run: the model server answered HTTP, so the analysis started, and failed after 991 s with no step.
+    created = conversations(_fenced(_answer()))
+    not_answering = MODEL_NOT_ANSWERING.format(seconds=90)
+    monkeypatch.setattr(analyzer_module, "check_model", lambda workspace, config: not_answering)
+
+    with pytest.raises(AnalysisError, match="did not answer a 1-token request within 90 s"):
+        AnalyzerAgent(_llm_config()).analyze(LocalWorkspace(working_dir=str(tmp_path)), fact_sheet)
+
+    assert created == []  # no conversation was started
 
 
 @pytest.mark.parametrize(

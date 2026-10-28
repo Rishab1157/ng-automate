@@ -1,3 +1,4 @@
+import shlex
 from pathlib import Path
 
 import pytest
@@ -181,10 +182,34 @@ def test_chosen_files_for_other_runners() -> None:
 @pytest.mark.parametrize("files", [
     ["../etc/passwd"], ["/abs/LoginTest.java"], ["src/test/java/a;rm -rf/LoginTest.java"], ["-Dx=1"],
     ["src//LoginTest.java"], [f"t/test_{n}.py" for n in range(201)],
+    # Any script's letters are allowed, never a shell sign, a control character or a look-alike of either.
+    ["tests/सही/../test_x.py"], ["tests/test_$(id).py"], ["tests/test_`id`.py"], ["tests/test_a'b.py"],
+    ["tests/test_a\nb.py"], ["tests/test_a\x00.py"], ["tests/test_‮yp.py"], ["tests/test_a b.py"],
+    ["tests/test_ａ；b.py"], ["tests/test_*.py"], ["tests/test_~a.py"], ["-सही/test_a.py"], ["x" * 301],
 ])
 def test_unsafe_test_files_are_rejected(files: list[str]) -> None:
     with pytest.raises(ValidationError):
         resolve_test_command(_sheet("pip", ["pytest"]), test_files=files)
+
+
+HINDI_TEST = "src/test/java/com/demo/ngauto/TD_001_सही_यूज़र_से_लॉगिन.java"
+
+
+def test_a_test_file_named_in_another_script_runs_as_one_quoted_argument() -> None:
+    # A real run: the generator named a test after a Hindi case title, and the API refused to run it (400). Python's \w
+    # alone would still refuse it: Devanagari vowel signs are marks, not letters.
+    maven = resolve_test_command(_sheet("Maven", ["TestNG"]), test_files=[HINDI_TEST]).command
+    gradle = resolve_test_command(_sheet("Gradle", ["JUnit 5"]), test_files=[HINDI_TEST]).command
+    pytest_file = "tests/ngauto/test_td_002_वैध_लॉगिन.py"
+    plain = resolve_test_command(_sheet("pip", ["pytest"]), test_files=[pytest_file, "tests/test_ok.py"]).command
+
+    assert maven == (
+        "mvn -B -ntp test '-Dtest=com.demo.ngauto.TD_001_सही_यूज़र_से_लॉगिन' -Dsurefire.failIfNoSpecifiedTests=false"
+    )
+    # The shell reads each name back as one argument, exactly as written.
+    assert "-Dtest=com.demo.ngauto.TD_001_सही_यूज़र_से_लॉगिन" in shlex.split(maven)
+    assert shlex.split(gradle)[-2:] == ["--tests", "com.demo.ngauto.TD_001_सही_यूज़र_से_लॉगिन"]
+    assert shlex.split(plain)[-2:] == [pytest_file, "tests/test_ok.py"]
 
 
 def test_files_that_the_runner_cannot_run_are_rejected() -> None:

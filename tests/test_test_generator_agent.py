@@ -26,6 +26,7 @@ from app.models.llmModel import LlmConfigModel
 from app.models.runModel import RunEventType
 from app.models.testDataModel import TestCaseSpecModel, TestDataFormat, TestDataSetModel, TestStepModel
 from app.models.testRunModel import TestCommandModel
+from app.utils.LlmInstance import MODEL_NOT_ANSWERING
 from tests.test_healer_agent import FakeConversation
 
 generator_module = importlib.import_module("app.agents.TestGeneratorAgent.TestGeneratorAgent")
@@ -162,6 +163,19 @@ def test_weakening_an_existing_step_or_deleting_a_file_is_kept_and_reported(
     ]
 
 
+def test_a_model_that_does_not_answer_stops_the_generator_before_it_starts(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created = conversation()
+    not_answering = MODEL_NOT_ANSWERING.format(seconds=90)
+    monkeypatch.setattr(generator_module, "check_model", lambda workspace, config: not_answering)
+
+    outcome = _generate(_project(tmp_path))
+
+    assert outcome.error == f"The test generator stopped: {MODEL_NOT_ANSWERING.format(seconds=90)}"
+    assert created == [] and outcome.files == []
+
+
 def test_stopping_early_keeps_what_was_written(conversation: Callable[..., list[FakeConversation]], tmp_path: Path) -> None:
     project = _project(tmp_path)
 
@@ -261,6 +275,71 @@ def test_changes_to_the_projects_own_files_are_kept(
     assert [f.path for f in outcome.files] == [
         "pom.xml", "src/test/java/com/demo/pages/LoginPage.java", STEPS, new_steps,
     ]
+
+
+GENERATED = "src/test/java/com/demo/ngauto"
+WITH_A_TEST = "public class {name} {{\n    @Test\n    public void run() {{}}\n}}\n"
+
+
+def _write_generated_classes(project: Path) -> Callable[[], None]:
+    def write() -> None:
+        (project / GENERATED).mkdir(parents=True)
+        for name in ("TD_001_ValidLogin", "TD_002_LogoutTest", "Runner"):
+            (project / GENERATED / f"{name}.java").write_text(WITH_A_TEST.format(name=name), encoding="utf-8")
+        (project / GENERATED / "LoginFlow.java").write_text("public class LoginFlow {}\n", encoding="utf-8")  # no test
+    return write
+
+
+def test_a_new_test_class_that_a_plain_maven_run_skips_is_reported_and_kept(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
+    # A real run: 8 of 11 generated classes were not named like tests (*Test), so a plain `mvn test` never ran them.
+    project = _project(tmp_path)
+    conversation(edit=_write_generated_classes(project))
+    events: list[AgentEvent] = []
+
+    outcome = _generate(project, events=events)
+
+    skipped = [f"{GENERATED}/Runner.java", f"{GENERATED}/TD_001_ValidLogin.java"]
+    assert [(v.file, v.rule) for v in outcome.violations] == [(path, "not_run_by_default") for path in skipped]
+    notices = [e.message for e in events if e.type == RunEventType.AGENT_ERROR]
+    assert notices == [REVIEW_NOTICE.format(path=path, rules="not_run_by_default") for path in skipped]
+    assert all((project / path).exists() for path in skipped)  # only reported: never renamed
+
+
+def test_gradle_finds_test_classes_by_their_content_so_their_names_are_not_reported(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
+    project = _project(tmp_path)
+    conversation(edit=_write_generated_classes(project))
+    gradle = COMMAND.model_copy(update={"tool": "gradle", "command": "gradle test --no-daemon"})
+    agent = TestGeneratorAgent(LlmConfigModel(model="openai/gpt-4o"), max_iterations=5)
+
+    outcome = agent.generate(LocalWorkspace(working_dir=str(project)), project, DATA, FACT_SHEET, FINDINGS, gradle)
+
+    assert outcome.violations == []
+
+
+def test_command_output_left_in_the_project_root_is_reported_and_kept(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
+    # A real run: the agent ran its build as `... | tee result.txt` and left result.txt in the project root.
+    project = _project(tmp_path)
+    (project / "src/test/resources").mkdir(parents=True)
+    (project / "src/test/resources/logback-test.xml").write_text("<file>test.log</file>\n", encoding="utf-8")
+
+    def write() -> None:
+        _writes_feature(project)()
+        (project / "result.txt").write_text("[INFO] BUILD SUCCESS\n", encoding="utf-8")
+        (project / "requirements.txt").write_text("selenium==4.25.0\n", encoding="utf-8")  # a real project change
+        (project / "test.log").write_text("12:00 INFO started\n", encoding="utf-8")  # by the project's own logging
+
+    conversation(edit=write)
+
+    outcome = _generate(project)
+
+    assert [(v.file, v.rule) for v in outcome.violations] == [("result.txt", "scratch_file")]
+    assert (project / "result.txt").exists()
 
 
 def _cases(count: int) -> TestDataSetModel:

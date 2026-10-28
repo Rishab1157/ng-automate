@@ -22,6 +22,7 @@ from app.models.analyzerModel import (
 )
 from app.models.testDataModel import TestCaseSpecModel, TestStepModel
 from app.models.testRunModel import TestCommandModel
+from app.utils.AgentPromptRules import TERMINAL_RULE
 
 RULES = "How to work"
 USER_FIRST = "they come first"
@@ -200,6 +201,22 @@ def test_done_means_the_projects_own_test_command_finds_and_runs_the_new_tests_w
         assert "the project's own test command would find and run your new tests" in rules
         assert "building or loading them is not enough" in rules
         assert "without running the tests" in rules and "Do not run the whole suite" in rules
+
+
+def test_the_rules_ask_for_names_the_project_runs_and_for_scratch_output_outside_the_project() -> None:
+    # Real runs: 8 of 11 classes were not named like the project's tests, so its plain test command skipped them; a
+    # test named after a Hindi title could not be chosen to run; `| tee result.txt` was left in the project root.
+    rules = " ".join(_first().split(RULES, 1)[1].split())
+
+    assert "the way the project's normal test command finds tests" in rules
+    assert "a plain run of all its tests runs yours too" in rules
+    assert "Use only ASCII letters, digits, `_`, `-` and `.` in the names" in rules  # the dot: login.spec.ts
+    assert "saved command output (`| tee`, `> file`) outside the project (for example in /tmp)" in rules
+
+
+def test_the_rules_say_the_terminal_can_check_an_answer_that_looks_wrong() -> None:
+    # A real run: the grep tool answered "No files found" for files that were there, and the generator believed it.
+    assert TERMINAL_RULE in _first().split(RULES, 1)[1]
 
 
 # ---------- generic: nothing from another stack ----------

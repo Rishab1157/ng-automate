@@ -49,6 +49,35 @@ def test_commenting_an_assertion_is_rejected() -> None:
     assert "assertion_commented" in rules
 
 
+@pytest.mark.parametrize(("path", "comment"), [
+    ("src/test/java/LoginTest.java", "// assertThat(cart.count()).isEqualTo(2);"),
+    ("src/test/java/LoginTest.java", "/* Assert.assertTrue(page.isOpen()); */"),
+    ("tests/test_login.py", "# assert page.title() == 'Dashboard'"),
+    ("tests/test_login.py", "# assert response.ok"),
+    ("tests/test_login.py", "#self.assertEqual(title, 'Dashboard')"),
+    ("e2e/login.spec.ts", "// await expect(page).toHaveTitle('Dashboard');"),
+    ("cypress/e2e/login.cy.js", "// cy.get('.title').should('be.visible')"),
+    ("src/test/resources/features/login.feature", "# Then the dashboard is shown"),
+])
+def test_assertion_code_in_a_comment_is_reported(path: str, comment: str) -> None:
+    before = "x = 1\n"
+
+    assert [v.rule for v in check_test_integrity(path, before, before + comment + "\n")] == ["assertion_commented"]
+
+
+@pytest.mark.parametrize(("path", "comment"), [
+    ("src/test/java/InventoryTest.java", "// Get list of product names and assert first"),  # a real false alarm
+    ("src/test/java/InventoryTest.java", "// Then we verify the cart total"),
+    ("tests/test_cart.py", "# should show the cart, assert after the reload"),
+    ("tests/test_cart.py", "# And now the user logs out"),
+    ("e2e/cart.spec.ts", "// expect the badge to update before we assert it"),
+])
+def test_a_comment_that_only_talks_about_a_check_is_not_reported(path: str, comment: str) -> None:
+    before = "x = 1\n"
+
+    assert check_test_integrity(path, before, before + comment + "\n") == []
+
+
 @pytest.mark.parametrize(
     ("path", "before", "after"),
     [
@@ -146,3 +175,27 @@ def test_other_files_are_not_parsed() -> None:
 )
 def test_stray_files(path: str, stray: bool) -> None:
     assert bool(check_new_file(path)) is stray
+
+
+@pytest.mark.parametrize(("path", "scratch"), [
+    ("result.txt", True),  # a real run: `mvn ... | tee result.txt`, left in the project root
+    ("results.txt", True),
+    ("test-output.txt", True),
+    ("build.log", True),
+    ("nohup.out", True),
+    ("requirements.txt", False),  # a new dependency list is part of the work
+    ("about.txt", False),
+    ("docs/result.txt", False),  # only the project root: a file in a folder was put there on purpose
+    ("src/test/resources/data/output.txt", False),
+    ("logging.properties", False),
+])
+def test_command_output_saved_in_the_project_root_is_reported(path: str, scratch: bool) -> None:
+    assert [v.rule for v in check_new_file(path)] == (["scratch_file"] if scratch else [])
+
+
+def test_a_log_that_the_projects_own_files_name_is_not_reported() -> None:
+    # The project's logging writes test.log whenever its tests run, also when an agent runs them: not the agent's.
+    project_files = {"src/test/resources/log4j2.xml": '<File name="file" fileName="test.log"/>'}
+
+    assert check_new_file("test.log", project_files) == []
+    assert [v.rule for v in check_new_file("result.txt", project_files)] == ["scratch_file"]

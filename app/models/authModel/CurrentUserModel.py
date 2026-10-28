@@ -12,6 +12,8 @@ class CurrentUserModel(BaseModel):
     org_id: str
     role_id: str | None = None
     email: str = ""
+    firstname: str = ""
+    lastname: str = ""
     permissions: frozenset[str] = frozenset()
 
     def has_permission(self, code: str) -> bool:

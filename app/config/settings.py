@@ -158,10 +158,20 @@ class Settings(BaseSettings):
     # writes until its context is full, for minutes, and holds the model server (Ollama answers one request at a time)
     # while every other agent waits silently.
     LLM_MAX_OUTPUT_TOKENS: int = 4096
-    # Seconds one model call may take, and how often a failed call is tried again. The SDK's own defaults (300 s,
-    # 5 more tries with growing pauses) kept an agent silent for many minutes when the model server was unreachable.
+    # Seconds one model call may take, and how many times a failing call is made in all (the SDK counts the first
+    # call). The SDK's own defaults (300 s, 5 tries) kept an agent silent for many minutes when the model server was
+    # unreachable.
     LLM_TIMEOUT_SECONDS: int = 300
-    LLM_NUM_RETRIES: int = 2
+    LLM_NUM_RETRIES: int = 3
+    # The pause before each new try: it doubles from the first value up to the second. A model gateway that rate-limits
+    # (HTTP 429) usually lets calls through again within a minute; with 2 tries and the SDK's 8 s pause, the healer
+    # stopped at once.
+    LLM_RETRY_MIN_WAIT_SECONDS: int = 20
+    LLM_RETRY_MAX_WAIT_SECONDS: int = 60
+    # Seconds a self-hosted model may take to answer a 1-token request, asked before an agent starts or test data is
+    # read with it. Its server answers HTTP at once also when generation is stuck: a real analysis then waited the full
+    # LLM_TIMEOUT_SECONDS on every try (991 s) and a text source stayed "processing" for 20+ minutes. 0: no check.
+    MODEL_ANSWER_CHECK_SECONDS: int = 90
 
     @property
     def MAX_PROJECT_BYTES(self) -> int:

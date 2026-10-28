@@ -1,7 +1,10 @@
+import asyncio
+import shutil
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
+from starlette.types import Receive, Scope, Send
 
 from app.core.security import get_current_user, require_permission, resolve_org_id
 from app.dto.projectDto import (
@@ -9,7 +12,9 @@ from app.dto.projectDto import (
     ProjectDeletedResponseDTO,
     ProjectFileContentResponseDTO,
     ProjectFileTreeResponseDTO,
+    ProjectPushResponseDTO,
     ProjectResponseDTO,
+    PushProjectDTO,
     SaveProjectFileDTO,
 )
 from app.dto.projectProfileDto import ProjectProfileResponseDTO
@@ -21,13 +26,18 @@ from app.dto.testDataDto import (
     UpdateTestDataCasesDTO,
 )
 from app.models.authModel import CurrentUserModel
-from app.models.projectFileModel import ProjectFileRoot
+from app.models.projectFileModel import ProjectDownloadModel, ProjectFileRoot
 from app.models.testDataModel import TestDataStatus
 from app.permissions.ngAutomatePermission import NGAUTOMATE_ACCESS_PERM
 from app.services.projectProfileService import ProjectProfileService
-from app.services.projectService import ProjectFileService, ProjectService
+from app.services.projectService import ProjectFileService, ProjectGitService, ProjectService
 from app.services.testDataService import TestDataService, test_data_processor
-from app.utils.TestDataParser import MAX_TEST_DATA_BYTES
+from app.utils.TestDataParser import (
+    ACCEPTED_EXTENSIONS,
+    MAX_TEST_DATA_BYTES,
+    STRUCTURED_EXTENSIONS,
+    TEXT_EXTENSIONS,
+)
 
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 PROJECT_DELETED = "Project deleted successfully"
@@ -35,6 +45,10 @@ MODEL_CONNECTION_QUERY = (
     "QXcel model connection (enabled for NG Automate) that reads a free-form source. Ignored when the server uses its "
     "local model (USE_LOCAL_LLM); required otherwise."
 )
+# The file types the test-data parser accepts, as the upload documents them (".json, .csv").
+STRUCTURED_FILE_TYPES = ", ".join(f".{name}" for name in STRUCTURED_EXTENSIONS)
+TEXT_FILE_TYPES = ", ".join(f".{name}" for name in TEXT_EXTENSIONS)
+TEST_DATA_FILE_TYPES = ", ".join(f".{name}" for name in ACCEPTED_EXTENSIONS)
 
 router = APIRouter(
     prefix="/tx-agents/ng-automate/project",
@@ -46,6 +60,7 @@ project_service = ProjectService()
 project_profile_service = ProjectProfileService()
 test_data_service = TestDataService()
 project_file_service = ProjectFileService()
+project_git_service = ProjectGitService()
 
 
 @router.post(
@@ -120,6 +135,54 @@ async def delete_project(project_id: str, org_id: str = Depends(resolve_org_id))
 
 
 @router.get(
+    "/{project_id}/download",
+    summary="Download the whole project as it is now (its editable copy, with every change the agents and you made) "
+    "as <project name>-<YYYYMMDD-HHMMSS>.zip. Tool folders (.git, node_modules, target, .venv, ...) and test results "
+    "(ngauto-results, test-results, playwright-report, allure-results) are left out. Uploaded and git projects alike.",
+    response_class=FileResponse,
+)
+async def download_project(project_id: str, org_id: str = Depends(resolve_org_id)) -> FileResponse:
+    return _DownloadResponse(await project_file_service.download(project_id, org_id))
+
+
+@router.post(
+    "/{project_id}/git/push",
+    response_model=ProjectPushResponseDTO,
+    summary="Push the project to its git repository as one commit by you, with the git connection's current URL and "
+    "token. target current: onto the connection's branch at its latest commit (the project's version of a file "
+    "always wins; files only the remote has stay). target new_branch: a new branch <connection name>-<UTC time> from "
+    "the commit the project was created from (or the branch's latest commit when the remote no longer has it: "
+    "based_on says which). Files deleted in the project are deleted; the repository's .gitignore keeps ignored files "
+    "out; tool folders and test results are never pushed. 400 NOT_A_GIT_PROJECT for uploaded projects (download "
+    "them); 404 CONNECTION_NOT_FOUND when the connection is gone or disabled; 409 PROJECT_BUSY while a run uses the "
+    "project; 422 GIT_PUSH_FAILED when git fails (e.g. no write access, the remote rejected the push).",
+)
+async def push_project(
+    project_id: str,
+    dto: PushProjectDTO,
+    org_id: str = Depends(resolve_org_id),
+    current_user: CurrentUserModel = Depends(get_current_user),
+) -> ProjectPushResponseDTO:
+    result = await project_git_service.push(project_id, org_id, current_user, dto.target, dto.message)
+    return ProjectPushResponseDTO.from_model(result)
+
+
+class _DownloadResponse(FileResponse):
+    """A zip made for one download (sent with its Content-Length). Its folder is removed when the response is over,
+    also when the client went away halfway (a background task would not run then)."""
+
+    def __init__(self, download: ProjectDownloadModel) -> None:
+        super().__init__(download.path, filename=download.filename, media_type="application/zip")
+        self.folder = download.folder
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await asyncio.to_thread(shutil.rmtree, self.folder, ignore_errors=True)
+
+
+@router.get(
     "/{project_id}/profile",
     response_model=ProjectProfileResponseDTO,
     summary="Get the project's current profile: the result of its latest completed analysis.",
@@ -133,13 +196,15 @@ async def get_project_profile(project_id: str, org_id: str = Depends(resolve_org
     status_code=status.HTTP_201_CREATED,
     response_model=TestDataResponseDTO,
     summary="Upload a test-data source for the test generator: our JSON/CSV test-case format (ready at once, 201), "
-    "or JSON in any other shape / plain text (.txt, .md) that an LLM turns into test cases in the background (202, "
-    "status processing: poll it). Invalid files are rejected.",
+    f"or JSON / CSV in any other shape or plain text ({TEXT_FILE_TYPES}) that an LLM turns into test cases in the "
+    "background (202, status processing: poll it). Invalid or empty files are rejected.",
 )
 async def upload_test_data(
     project_id: str,
     response: Response,
-    file: UploadFile = File(description="Test cases (.json, .csv) or a free-form source (.json, .txt, .md)"),
+    file: UploadFile = File(
+        description=f"Test cases ({STRUCTURED_FILE_TYPES}) or a free-form source ({TEST_DATA_FILE_TYPES})"
+    ),
     model_connection_id: str | None = Query(None, description=MODEL_CONNECTION_QUERY),
     org_id: str = Depends(resolve_org_id),
     current_user: CurrentUserModel = Depends(get_current_user),

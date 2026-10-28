@@ -15,6 +15,7 @@ from openhands.sdk.conversation.impl.remote_conversation import RemoteConversati
 
 from app.agents.AnalyzerAgent.AgentEventMapper import AgentEvent
 from app.core.exceptions import AnalysisError
+from app.models.llmModel import LlmConfigModel
 from app.utils import AgentConversationUtils as conversation_utils
 from app.utils.AgentConversationUtils import RUN_SLICE_SECONDS, EventForwarder, ask
 from app.utils.AgentControl import EARLIER_INSTRUCTIONS, USER_MESSAGE, AgentControl
@@ -230,3 +231,33 @@ def test_conversations_without_a_status_are_not_resumed() -> None:
     ask(conversation, "task", time.monotonic() + 30, _failure, AgentControl())  # type: ignore[arg-type]
 
     assert conversation.runs == 1
+
+
+# ---------- before an agent starts: can it use its model? ----------
+
+class _Sandbox:
+    """A sandbox whose curl to the model server ends with `exit_code`."""
+
+    def __init__(self, exit_code: int, stderr: str = "") -> None:
+        self.exit_code, self.stderr = exit_code, stderr
+
+    def execute_command(self, command: str, cwd: str | None = None, timeout: float = 30.0) -> Any:
+        return SimpleNamespace(exit_code=self.exit_code, stdout="", stderr=self.stderr, timeout_occurred=False)
+
+
+def test_an_agent_starts_only_when_its_sandbox_reaches_the_model_and_the_model_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = LlmConfigModel(model="ollama_chat/qwen2.5-coder:14b", base_url="http://192.168.3.90:11435")
+    asked: list[LlmConfigModel] = []
+    monkeypatch.setattr(conversation_utils, "check_model_answers", lambda llm_config: asked.append(llm_config))
+    refused = "curl: (7) Failed to connect to 192.168.3.90 port 11435"
+
+    assert conversation_utils.check_model(_Sandbox(0), config) is None
+    assert conversation_utils.check_model(_Sandbox(7, refused), config) == (
+        conversation_utils.MODEL_UNREACHABLE_FROM_SANDBOX.format(reason=refused)
+    )
+    assert asked == [config]  # a server the sandbox cannot reach is not asked anything more
+
+    monkeypatch.setattr(conversation_utils, "check_model_answers", lambda llm_config: "it did not answer")
+    assert conversation_utils.check_model(_Sandbox(0), config) == "it did not answer"

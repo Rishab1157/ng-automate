@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -80,9 +81,13 @@ async def test_events_appended_while_following_arrive_live(app_db: MongoClient, 
     run_id = _seed_run(app_db, org_id, status="running", events=1)
     service = RunEventStreamService(poll_seconds=0.05, heartbeat_seconds=0.15)
     run_service = RunService()
+    heartbeat_sent = asyncio.Event()
 
     async def write_more() -> None:
-        await asyncio.sleep(0.2)
+        # Only after the quiet stream sent its heartbeat: with fixed pauses, a slow machine's poll rounds missed the
+        # short quiet windows and no heartbeat came. The wait is bounded: a missing heartbeat fails below, never hangs.
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(heartbeat_sent.wait(), timeout=10)
         await run_service.append_event(run_id, org_id, RunEventType.AGENT_ACTION, "late step")
         await asyncio.sleep(0.2)
         await run_service.mark_completed(run_id)
@@ -91,7 +96,11 @@ async def test_events_appended_while_following_arrive_live(app_db: MongoClient, 
         return False
 
     writer = asyncio.create_task(write_more())
-    items = [item async for item in service.follow(run_id, org_id, 0, never_disconnected)]
+    items = []
+    async for item in service.follow(run_id, org_id, 0, never_disconnected):
+        items.append(item)
+        if item.is_heartbeat:
+            heartbeat_sent.set()
     await writer
 
     messages = [item.event.message for item in items if item.event]

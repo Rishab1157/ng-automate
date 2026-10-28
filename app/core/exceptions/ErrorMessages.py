@@ -37,6 +37,16 @@ class ErrorMessages:
     GIT_HOST_UNREACHABLE = "Could not reach the Git server"
     GIT_FAILED = "Git failed: {reason}"
 
+    # Push (a git project's files back to its repository)
+    NOT_A_GIT_PROJECT = (
+        "Only download is available for uploaded projects: push needs a project created from a git connection"
+    )
+    PROJECT_BUSY_PUSH = "A run is using this project: push it when the run has finished"
+    PROJECT_NOTHING_TO_PUSH = "The project has no files to push"
+    GIT_NO_WRITE_ACCESS = "The token on this git connection has no write access to this repository"
+    GIT_PUSH_REJECTED = "The remote rejected the push: {reason}"
+    GIT_PUSH_OUTDATED = "Branch '{branch}' changed on the remote while pushing: push again"
+
     # Model connections
     MODEL_CONNECTION_NOT_FOUND = "Model connection not found or not enabled for NG Automate in this organization"
     MODEL_CONNECTION_REQUIRED = (

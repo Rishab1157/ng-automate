@@ -8,6 +8,7 @@ from openhands.sdk.logger import get_logger
 from openhands.sdk.utils import maybe_truncate
 from openhands.tools.terminal.constants import (
     CMD_OUTPUT_PS1_END,
+    EXIT_CODE_HINTS,
     MAX_CMD_OUTPUT_SIZE,
     NO_CHANGE_TIMEOUT_SECONDS,
     POLL_INTERVAL,
@@ -91,6 +92,9 @@ class TerminalSession(TerminalSessionBase):
         # Store the last command for interactive input handling
         self.prev_status = None
         self.prev_output = ""
+        # What a timeout message tells the model to do (a pooled terminal sets its
+        # own: it cannot wait for a running command).
+        self.timeout_message: str = TIMEOUT_MESSAGE_TEMPLATE
         # Stateful filter for terminal query sequences (handles split sequences)
         self._query_filter = TerminalQueryFilter()
 
@@ -270,6 +274,10 @@ class TerminalSession(TerminalSessionBase):
                 f"CTRL+{command[-1].upper()} was sent.]"
             )
         )
+        # NG Automate: what the shell's "could not run it" exit codes mean.
+        hint = EXIT_CODE_HINTS.get(metadata.exit_code)
+        if hint and not is_special_key and not self.terminal.is_powershell():
+            metadata.suffix += f"\n[{hint}]"
         command_output = self._get_command_output(
             command,
             raw_command_output,
@@ -312,7 +320,8 @@ class TerminalSession(TerminalSessionBase):
         metadata = CmdOutputMetadata()  # No metadata available
         metadata.suffix = (
             f"\n[The command has no new output after "
-            f"{self.no_change_timeout_seconds} seconds. {TIMEOUT_MESSAGE_TEMPLATE}]"
+            f"{self.no_change_timeout_seconds} seconds. It may still be working, or "
+            f"be waiting for input. {self.timeout_message}]"
         )
         command_output = self._get_command_output(
             command,
@@ -351,8 +360,8 @@ class TerminalSession(TerminalSessionBase):
         )
         metadata = CmdOutputMetadata()  # No metadata available
         metadata.suffix = (
-            f"\n[The command timed out after {timeout} seconds. "
-            f"{TIMEOUT_MESSAGE_TEMPLATE}]"
+            f"\n[The command timed out after {timeout} seconds and is still "
+            f"running. {self.timeout_message}]"
         )
         command_output = self._get_command_output(
             command,
@@ -509,7 +518,7 @@ class TerminalSession(TerminalSessionBase):
                 f'\n[Your command "{command}" is NOT executed. The previous command '
                 f"is still running - You CANNOT send new commands until the previous "
                 f"command is completed. By setting `is_input` to `true`, you can "
-                f"interact with the current process: {TIMEOUT_MESSAGE_TEMPLATE}]"
+                f"interact with the current process: {self.timeout_message}]"
             )
             logger.debug(
                 "Previous command output (content_length=%s)",

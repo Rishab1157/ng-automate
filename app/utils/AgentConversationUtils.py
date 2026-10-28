@@ -35,6 +35,7 @@ from app.models.llmModel import LlmConfigModel
 from app.models.runModel import RunEventLevel, RunEventType
 from app.models.tokenUsageModel import TokenUsageModel
 from app.utils.AgentControl import AgentControl
+from app.utils.LlmInstance import check_model_answers, sandbox_base_url
 from app.utils.TokenCost import priced
 
 logger = logging.getLogger(__name__)
@@ -335,6 +336,15 @@ def describe_last_steps(conversation: BaseConversation, limit: int = MAX_LAST_ST
             else:
                 steps.append([text, 1])
     return "; ".join(text + (f" (x{count})" if count > 1 else "") for text, count in steps[-limit:])
+
+
+def check_model(workspace: BaseWorkspace, llm_config: LlmConfigModel) -> str | None:
+    """Why an agent cannot start with its model, or None: its sandbox must reach the model server, and a self-hosted
+    model must answer a 1-token request (a server that answers HTTP can still be stuck: check_model_answers)."""
+    unreachable = check_model_reachable(workspace, sandbox_base_url(llm_config.base_url))
+    if unreachable is not None:
+        return MODEL_UNREACHABLE_FROM_SANDBOX.format(reason=unreachable)
+    return check_model_answers(llm_config)
 
 
 def check_model_reachable(workspace: BaseWorkspace, base_url: str | None) -> str | None:

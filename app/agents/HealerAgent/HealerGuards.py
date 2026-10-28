@@ -4,8 +4,8 @@ The healer fixes technical problems (dependencies, compile errors, configuration
 or skipping tests, commenting checks out, or swallowing failures makes a red build green without fixing anything,
 so every change an agent makes to a test file is checked here, and each one that does any of that is reported.
 
-Small models also make clumsy edits: a build file that no longer parses (e.g. XML mangled by a sed command) or
-backup copies left behind. Those are reported too.
+Small models also make clumsy edits: a build file that no longer parses (e.g. XML mangled by a sed command), backup
+copies or saved command output left behind. Those are reported too.
 
 Nothing is ever rolled back (the user's rule): the project's own framework may need the agents' changes, so every
 change stays, and the user reviews what is reported here.
@@ -15,6 +15,7 @@ import json
 import re
 import xml.etree.ElementTree as ElementTree
 from collections import Counter
+from collections.abc import Mapping
 from pathlib import PurePosixPath
 
 from app.models.healerModel import FileChangeModel, GuardViolationModel
@@ -40,7 +41,17 @@ _SKIP = re.compile(
     r"|\bxit\s*\(|\bxdescribe\s*\(|^\s*@skip\b|@unittest\.skip|\[Ignore\]",
 )
 _COMMENT = re.compile(r"^\s*(//|#|/\*|\*|<!--|--)")
+# A check commented out: assertion CODE in a comment (a call, or an assert statement with an expression), never prose
+# that mentions one ("// Get the product names and assert first"). Gherkin steps count only in step files.
+_COMMENTED_ASSERTION = re.compile(
+    r"\b(assert\w*|Assert\.\w+|expect|verify)\s*\(|\.(should|to(Be|Equal|Have))\w*\s*\("
+    r"|^\s*assert\s.*(\w\.\w|[(\[=<>!])"
+)
+_GHERKIN_CHECK = re.compile(r"^\s*(Then|And|But)\s")
+_STEP_FILES = (".feature", ".robot")
 _STRAY_FILE = re.compile(r"\.(bak|backup|orig|rej|swp)$|~$", re.IGNORECASE)
+# Output an agent saved while it worked, at the project root (`... | tee result.txt`): a log, or a text file named so.
+_SCRATCH_FILE = re.compile(r"\.(log|out)$|(^|[^a-z])(result|output|out|log|tmp|temp|debug)s?\.txt$", re.IGNORECASE)
 # Declarations that could make the XML parser expand entities: such files are not checked.
 _XML_DECLARATIONS = ("<!DOCTYPE", "<!ENTITY")
 _SWALLOW = re.compile(r"except\b[^:]*:\s*(pass)?\s*$|catch\s*\([^)]*\)\s*\{\s*\}")
@@ -71,7 +82,7 @@ def check_test_integrity(path: str, before: str, after: str) -> list[GuardViolat
     for line in added:
         if _SKIP.search(line):
             violations.append(_violation(path, "test_skipped", line))
-        elif _COMMENT.match(line) and _ASSERTION.search(_COMMENT.sub("", line, count=1)):
+        elif _COMMENT.match(line) and _is_assertion_code(path, _COMMENT.sub("", line, count=1)):
             violations.append(_violation(path, "assertion_commented", line))
         elif _SWALLOW.search(line) and _swallow_is_new(line, before):
             violations.append(_violation(path, "failure_swallowed", line))
@@ -88,7 +99,7 @@ def check_changes(
         before = snapshot.content(change.path) or ""
         after = "" if change.change == "deleted" else (snapshot.root / change.path).read_text(encoding="utf-8")
         if change.change == "added":
-            violations.extend(check_new_file(change.path))
+            violations.extend(check_new_file(change.path, snapshot.files))
         elif change.change == "modified":
             violations.extend(check_build_file(change.path, before, after))
         elif not allow_deletes:
@@ -98,10 +109,16 @@ def check_changes(
     return violations
 
 
-def check_new_file(path: str) -> list[GuardViolationModel]:
-    """A file the healer added: backup copies and editor leftovers are not part of a fix."""
+def check_new_file(path: str, project_files: Mapping[str, str] | None = None) -> list[GuardViolationModel]:
+    """A file an agent added: backup copies and editor leftovers are not part of a fix, and neither is command output
+    it saved at the project root. A file in a folder was put there on purpose, and a log that the project's files
+    (before the agent's work) name is the project's own, e.g. the one its logging writes when the tests run."""
     if _STRAY_FILE.search(PurePosixPath(path).name):
         return [_violation(path, "stray_file", path)]
+    if "/" not in path and _SCRATCH_FILE.search(path) and not any(
+        path in text for text in (project_files or {}).values()
+    ):
+        return [_violation(path, "scratch_file", path)]
     return []
 
 
@@ -138,6 +155,11 @@ def _diff_lines(before: str, after: str) -> tuple[list[str], list[str]]:
     old = Counter(line.strip() for line in before.splitlines() if line.strip())
     new = Counter(line.strip() for line in after.splitlines() if line.strip())
     return list((old - new).elements()), list((new - old).elements())
+
+
+def _is_assertion_code(path: str, text: str) -> bool:
+    """`text` (a comment without its comment sign) is an assertion written as code, not prose about one."""
+    return bool(_COMMENTED_ASSERTION.search(text)) or (path.endswith(_STEP_FILES) and bool(_GHERKIN_CHECK.match(text)))
 
 
 def _swallow_is_new(line: str, before: str) -> bool:

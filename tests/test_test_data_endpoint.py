@@ -356,3 +356,76 @@ def test_a_retry_can_use_another_model_connection(
     assert upload.status_code == 202 and retry.status_code == 202
     doc = mongo[settings.MONGO_DATABASE].test_data.find_one({"_id": ObjectId(test_data_id)})
     assert doc["model_connection_id"] == ObjectId(second)
+
+
+def test_csv_in_another_shape_is_a_free_form_source(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str, processor: FakeProcessor
+) -> None:
+    export = b"ID,Title,Steps,Expected Result\nC101,Valid login,Open the site and log in,The Products page is shown\n"
+
+    response = _upload(client, auth_headers(org_id), seed_project(mongo, org_id), export, "testrail.csv")
+
+    assert response.status_code == 202
+    body = response.json()
+    assert (body["status"], body["source_format"], body["case_count"]) == ("processing", "csv", 0)
+    assert processor.submitted == [body["id"]]
+    doc = mongo[settings.MONGO_DATABASE].test_data.find_one({"_id": ObjectId(body["id"])})
+    assert doc["raw_source"] == export.decode()
+
+
+@pytest.mark.parametrize("content", [b"", b" \n", b"ID,Title,Steps\n"])
+def test_empty_csv_is_rejected(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str, processor: FakeProcessor,
+    content: bytes,
+) -> None:
+    response = _upload(client, auth_headers(org_id), seed_project(mongo, org_id), content, "cases.csv")
+
+    assert response.status_code == 400
+    assert processor.submitted == []
+    assert mongo[settings.MONGO_DATABASE].test_data.count_documents({}) == 0
+
+
+# ---------- ids new in the project ----------
+
+NO_IDS = [
+    {"title": "Login", "steps": [{"action": "open", "target": "https://shop.example/login"}]},
+    {"title": "Logout", "steps": [{"action": "open", "target": "https://shop.example/logout"}]},
+]
+
+
+def _ids(body: dict) -> list[str]:
+    return [case["id"] for case in body["cases"]]
+
+
+def test_cases_without_ids_get_ids_new_in_the_project_on_upload_save_and_review(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    # Every upload numbered its cases without an id from 1: one project had several tests named after TC-1.
+    headers, project_id = auth_headers(org_id), seed_project(mongo, org_id)
+    first = _upload(client, headers, project_id, json.dumps(NO_IDS).encode()).json()
+    second = _upload(client, headers, project_id, json.dumps(NO_IDS).encode(), "more.json").json()
+    other_project = _upload(client, headers, seed_project(mongo, org_id), json.dumps(NO_IDS).encode()).json()
+
+    saved = _save(client, headers, project_id, first["id"], json.dumps(NO_IDS)).json()  # its own ids are not taken
+    reviewed = client.put(f"{BASE}/{project_id}/test-data/{second['id']}", headers=headers, json={"cases": [
+        {"id": "", "title": "Cart", "steps": [{"action": "open", "target": "https://shop.example/cart"}]},
+    ]}).json()
+
+    assert (_ids(first), _ids(second)) == (["TD-001", "TD-002"], ["TD-003", "TD-004"])
+    assert _ids(other_project) == ["TD-001", "TD-002"]  # another project has its own ids
+    assert _ids(saved) == ["TD-001", "TD-002"]
+    assert _ids(reviewed) == ["TD-003"]
+
+
+def test_the_upload_description_names_every_accepted_file_type() -> None:
+    # It said "(.txt, .md)" while .text and .feature files were accepted too.
+    from app.main import app
+    from app.utils.TestDataParser import ACCEPTED_EXTENSIONS, TEXT_EXTENSIONS
+
+    schema = app.openapi()
+    operation = schema["paths"][f"{BASE}/{{project_id}}/test-data"]["post"]
+    body_ref = operation["requestBody"]["content"]["multipart/form-data"]["schema"]["$ref"]
+    file_field = schema["components"]["schemas"][body_ref.rsplit("/", 1)[-1]]["properties"]["file"]
+
+    assert all(f".{name}" in operation["summary"] for name in TEXT_EXTENSIONS)
+    assert all(f".{name}" in file_field["description"] for name in ACCEPTED_EXTENSIONS)

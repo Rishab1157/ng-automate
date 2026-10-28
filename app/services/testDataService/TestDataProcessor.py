@@ -112,7 +112,9 @@ class TestDataProcessor:
         try:
             llm_config = await self.model_connection_service.get_llm_config(upload.model_connection_id, upload.org_id)
             extractor = await asyncio.to_thread(self._new_extractor, llm_config)
-            data_set = await asyncio.to_thread(extractor.extract, upload.raw_source, upload.source_format)
+            # Sources are read one at a time by default, so each one sees the cases of those read before it.
+            taken_ids = await service.find_case_ids(upload.project_id, test_data_id)
+            data_set = await asyncio.to_thread(extractor.extract, upload.raw_source, upload.source_format, taken_ids)
         except asyncio.CancelledError:
             raise  # stays processing: read again on the next start
         except NgAutomateException as error:

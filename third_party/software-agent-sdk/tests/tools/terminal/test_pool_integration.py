@@ -12,6 +12,7 @@ import time
 import pytest
 
 from openhands.sdk.tool import DeclaredResources
+from openhands.tools.terminal.constants import POOLED_TIMEOUT_MESSAGE
 from openhands.tools.terminal.definition import (
     TerminalAction,
     TerminalObservation,
@@ -139,3 +140,28 @@ class TestTmuxPoolRecovery:
         assert reset_obs.exit_code == 0
         assert "Terminal session has been reset" in reset_obs.text
         assert pool_executor.working_dir in reset_obs.text
+
+
+class TestPooledTimeoutMessage:
+    def test_timeout_message_does_not_say_to_wait_for_the_command(self):
+        """NG Automate: a pooled terminal stops a timed-out command before its next
+        command, so its message says to run it again with a larger timeout instead
+        of to wait for it with '' (which only fails there)."""
+        with tempfile.TemporaryDirectory() as work_dir:
+            executor = TerminalExecutor(
+                working_dir=work_dir,
+                terminal_type="tmux",
+                no_change_timeout_seconds=1,
+            )
+            try:
+                obs = executor(TerminalAction(command="sleep 4; echo done"))
+                waited = executor(TerminalAction(command=""))
+            finally:
+                executor.close()
+
+        assert obs.metadata.suffix.startswith(
+            "\n[The command has no new output after 1 seconds."
+        )
+        assert POOLED_TIMEOUT_MESSAGE in obs.metadata.suffix
+        assert "Send an empty command" not in obs.metadata.suffix
+        assert waited.is_error and "No previous running command" in waited.text

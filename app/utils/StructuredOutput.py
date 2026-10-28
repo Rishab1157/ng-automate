@@ -2,14 +2,17 @@
 
 A plain LLM call (no agent, no tools): the provider is asked for `response_format: json_schema` (Ollama
 structured outputs, OpenAI strict JSON schema), so the reply can only be JSON of that shape. The caller's parser
-still validates it; a reply that fails is retried once more with the exact error.
+still validates it; a reply that fails is retried once more with the exact error. A rate-limited call (HTTP 429) is
+tried again after the pauses the agents' model calls make (LLM_NUM_RETRIES, LLM_RETRY_MIN/MAX_WAIT_SECONDS).
 """
 
 import logging
 from collections.abc import Callable
+from time import sleep  # this module's own name for it: tests replace it here, never time.sleep itself
 from typing import Any, TypeVar
 
 import litellm
+from openhands.sdk.llm.exceptions import is_quota_exhaustion_error
 
 from app.config import settings
 from app.models.llmModel import LlmConfigModel
@@ -46,11 +49,13 @@ def complete_json(
     reason = "no attempt was made"
     for attempt in range(1, max(attempts, 1) + 1):
         try:
-            reply = _complete(llm_config, messages, schema_name, schema, timeout_seconds, on_usage)
+            reply = _complete_with_pauses(llm_config, messages, schema_name, schema, timeout_seconds, on_usage)
         except Exception as error:
             # Provider errors can quote endpoints or keys: log the type only.
             logger.warning("Structured output call failed (attempt %d): %s", attempt, type(error).__name__)
             reason = f"the model call failed ({type(error).__name__})"
+            if _rate_limited(error):
+                break  # it was already tried again after pauses: never once more right away
             continue
         try:
             return parse(reply)
@@ -63,6 +68,27 @@ def complete_json(
                 {"role": "user", "content": f"That JSON is not valid: {reason}. Reply with the corrected JSON only."},
             ]
     raise ValueError(reason)
+
+
+def _complete_with_pauses(*args: Any) -> str:
+    """_complete, tried again while the provider rate-limits (HTTP 429), as the agents' model calls are: up to
+    LLM_NUM_RETRIES tries in all, the pause doubling from LLM_RETRY_MIN_WAIT_SECONDS up to LLM_RETRY_MAX_WAIT_SECONDS.
+    A used-up quota is not waited for (as the SDK does): no pause brings it back."""
+    for attempt in range(1, settings.LLM_NUM_RETRIES):
+        try:
+            return _complete(*args)
+        except Exception as error:
+            if not _rate_limited(error) or is_quota_exhaustion_error(error):
+                raise
+            pause = min(settings.LLM_RETRY_MIN_WAIT_SECONDS * 2 ** (attempt - 1), settings.LLM_RETRY_MAX_WAIT_SECONDS)
+            logger.warning("The model is rate limited: trying again in %d s", pause)
+            sleep(pause)
+    return _complete(*args)  # the last try: its error goes to the caller
+
+
+def _rate_limited(error: Exception) -> bool:
+    """HTTP 429 (LiteLLM's RateLimitError carries it too)."""
+    return getattr(error, "status_code", None) == 429
 
 
 def _complete(

@@ -14,6 +14,7 @@ import openhands.sdk.security.risk as risk
 from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.agent.critic_mixin import CriticMixin
 from openhands.sdk.agent.parallel_executor import ParallelToolExecutor
+from openhands.sdk.agent.repeated_failures import RepeatedFailures
 from openhands.sdk.agent.response_dispatch import (
     LLMResponseType,
     ResponseDispatchMixin,
@@ -352,8 +353,14 @@ class _ActionBatch:
         self,
         conversation: LocalConversation,
         on_event: ConversationCallbackType,
+        repeated_failures: RepeatedFailures | None = None,
     ) -> None:
-        """Emit all events in original action order."""
+        """Emit all events in original action order.
+
+        NG Automate: every executed call's results pass ``repeated_failures``, which
+        adds a note to the error of a call that failed the same way several times in
+        a row (agent/repeated_failures.py).
+        """
         for ae in self.action_events:
             reason = self.blocked_reasons.get(ae.id)
             if reason is not None:
@@ -374,7 +381,10 @@ class _ActionBatch:
                 )
                 on_event(rejection)
             else:
-                for event in self.results_by_id[ae.id]:
+                events = self.results_by_id[ae.id]
+                if repeated_failures is not None:
+                    events = repeated_failures.add_note(conversation.id, ae, events)
+                for event in events:
                     on_event(event)
 
     def finalize(
@@ -466,6 +476,8 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
     _parallel_executor: ParallelToolExecutor = PrivateAttr(
         default_factory=ParallelToolExecutor
     )
+    # NG Automate: counts tool calls that keep failing the same way.
+    _repeated_failures: RepeatedFailures = PrivateAttr(default_factory=RepeatedFailures)
 
     def model_post_init(self, __context: object) -> None:
         super().model_post_init(__context)
@@ -641,7 +653,7 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
             cancel_token=conversation.cancel_token,
             span_owner=conversation,
         )
-        batch.emit(conversation, on_event)
+        batch.emit(conversation, on_event, self._repeated_failures)
         batch.finalize(
             on_event=on_event,
             check_iterative_refinement=lambda ae: (
@@ -676,7 +688,7 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
             cancel_token=conversation.cancel_token,
             span_owner=conversation,
         )
-        batch.emit(conversation, on_event)
+        batch.emit(conversation, on_event, self._repeated_failures)
         batch.finalize(
             on_event=on_event,
             check_iterative_refinement=lambda ae: (

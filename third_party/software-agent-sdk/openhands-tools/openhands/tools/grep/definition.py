@@ -27,15 +27,17 @@ class GrepAction(Action):
     path: str | None = Field(
         default=None,
         description=(
-            "The directory (absolute path) to search in. "
-            "Defaults to the current working directory."
+            "The directory to search in: an absolute path, or a path relative to "
+            "the working directory. Defaults to the current working directory."
         ),
     )
     include: str | None = Field(
         default=None,
         description=(
-            "Optional file pattern to filter which files to search "
-            '(e.g., "*.js", "*.{ts,tsx}")'
+            "Optional file pattern to filter which files to search. Without '/' "
+            'it matches file names in every folder (e.g., "*.js", "*.{ts,tsx}"); '
+            "with '/' it matches the path relative to the searched directory "
+            '(e.g., "src/**/*.ts"). To search one folder, use path.'
         ),
     )
 
@@ -57,7 +59,7 @@ class GrepObservation(Observation):
 TOOL_DESCRIPTION = """Fast content search tool.
 * Searches file contents using regular expressions
 * Supports full regex syntax (eg. "log.*Error", "function\\s+\\w+", etc.)
-* Filter files by pattern with the include parameter (eg. "*.js", "*.{ts,tsx}")
+* Filter files by pattern with the include parameter (eg. "*.js", "*.{ts,tsx}", "src/**/*.ts")
 * Returns matching file paths sorted by modification time.
 * Only the first 100 results are returned. Consider narrowing your search with stricter regex patterns or provide path parameter if you need more results.
 * Use this tool when you need to find files containing specific patterns.

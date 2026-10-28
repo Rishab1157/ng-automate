@@ -1,10 +1,18 @@
 import json
+import re
+from collections.abc import Collection
 
 import pytest
 
 from app.core.exceptions import ValidationError
 from app.models.testDataModel import TestDataFormat
-from app.utils.TestDataParser import MAX_TEST_DATA_BYTES, parse_test_data
+from app.utils.TestDataParser import (
+    MAX_TEST_DATA_BYTES,
+    STRUCTURED_EXTENSIONS,
+    TEXT_EXTENSIONS,
+    parse_test_data,
+    read_test_data,
+)
 
 CASES = [
     {
@@ -41,11 +49,48 @@ def test_missing_locator_is_flagged_not_guessed() -> None:
     result = parse_test_data(json.dumps(CASES).encode(), "cases.json")
     second = result.cases[1]
 
-    assert second.id == "TC-2"
+    assert second.id == "TD-001"  # it gives no id: the first one new in the project (here: no other test data)
     assert second.steps[0].needs_locator is True
     assert second.steps[0].target is None
     assert second.steps[1].action == "verify_visible"
-    assert result.warnings == ["case TC-2 step 1: click needs a locator"]
+    assert result.warnings == ["case TD-001 step 1: click needs a locator"]
+
+
+def test_ids_our_formats_do_not_give_are_new_in_the_project_and_given_ones_are_kept() -> None:
+    # Every upload numbered its cases without an id from 1 (TC-1, TC-2, ...), so a project had several TC-1 tests.
+    cases = [
+        {"title": "Login", "steps": [{"action": "open", "target": "https://x.test"}]},
+        {"id": "TD-001", "title": "Cart", "steps": [{"action": "open", "target": "https://x.test/cart"}]},
+        {"title": "Logout", "steps": [{"action": "open", "target": "https://x.test"}]},
+    ]
+    txgenie = {
+        "test_cases": [{"title": "Login", "steps": [{"action": "Open the site", "expected_result": "It opens"}]}],
+    }
+    csv_text = "case_id,title,action,target\n,Login,open,https://x.test\nC1,Cart,open,https://x.test/cart\n"
+    taken = {"TD-001", "TD-002", "C1"}
+
+    def ids(content: str, filename: str, taken_ids: Collection[str] = ()) -> list[str]:
+        return [case.id for case in read_test_data(content.encode(), filename, taken_ids).cases]
+
+    # A file's own id is never renamed, also when another upload of the project has it.
+    assert ids(json.dumps(cases), "a.json") == ["TD-002", "TD-001", "TD-003"]
+    assert ids(json.dumps(cases), "a.json", taken) == ["TD-003", "TD-001", "TD-004"]
+    assert ids(json.dumps(txgenie), "b.json", taken) == ["TD-003"]
+    assert ids(csv_text, "c.csv", taken) == ["TD-003", "C1"]
+
+
+def test_an_error_still_names_a_case_without_an_id_by_its_place_in_the_file() -> None:
+    # Nothing is stored after an error: the user finds the case in the file, where no new id exists yet.
+    no_title = [
+        {"id": "A-1", "title": "Ok", "steps": [{"action": "open", "target": "u"}]},
+        {"steps": [{"action": "open"}]},
+    ]
+    duplicate = [{"id": "TD-001", "title": "t", "steps": [{"action": "open", "target": "u"}]}] * 2
+
+    with pytest.raises(ValidationError, match="Test case TC-2: 'title' is required"):
+        read_test_data(json.dumps(no_title).encode(), "x.json", {"TD-001"})
+    with pytest.raises(ValidationError, match="'TD-001' is used more than once"):  # still strict: never renamed
+        read_test_data(json.dumps(duplicate).encode(), "x.json")
 
 
 def test_csv_rows_grouped_by_case_with_bom() -> None:
@@ -67,7 +112,7 @@ def test_csv_rows_grouped_by_case_with_bom() -> None:
 @pytest.mark.parametrize(
     ("content", "filename", "message"),
     [
-        (b"[]", "x.xlsx", ".json, .csv, .txt or .md"),
+        (b"[]", "x.xlsx", ".json, .csv, .txt, .md, .text or .feature file"),
         (b"{not json", "x.json", "line 1"),
         (b'{"cases": []}', "x.json", "list of test cases"),
         (b"[]", "x.json", "no test cases"),
@@ -82,6 +127,34 @@ def test_csv_rows_grouped_by_case_with_bom() -> None:
 def test_bad_input_is_explained(content: bytes, filename: str, message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         parse_test_data(content, filename)
+
+
+def test_the_message_for_another_file_type_names_every_type_that_is_accepted() -> None:
+    # It named .json, .csv, .txt and .md, while .text and .feature files were accepted too.
+    with pytest.raises(ValidationError) as caught:
+        read_test_data(b"[]", "cases.xlsx")
+
+    assert re.findall(r"\.(\w+)", caught.value.message) == [*STRUCTURED_EXTENSIONS, *TEXT_EXTENSIONS]
+
+
+def test_csv_rows_of_one_case_with_another_title_stay_in_that_case_and_are_reported() -> None:
+    # Rows with the same case_id are one case, and a blank title after its first row is normal. A row with another
+    # title is likely a copied id: it stays a step of that case (splitting it would need a new id) and is reported.
+    csv_text = (
+        "case_id,title,action,target,value\n"
+        "C1,Login,open,https://x.test,\n"
+        "C1,,type,id=user,bob\n"
+        "C1,Logout,click,id=logout,\n"
+        "C1, logout ,click,id=menu,\n"
+        "C2,Cart,open,https://x.test/cart,\n"
+    )
+
+    result = parse_test_data(csv_text.encode(), "data.csv")
+
+    assert [(case.id, case.title, len(case.steps)) for case in result.cases] == [("C1", "Login", 4), ("C2", "Cart", 1)]
+    assert result.warnings == [
+        "case C1: the row titled 'Logout' was read as a step of 'Login' (rows with the same case_id are one case)"
+    ]
 
 
 def test_a_step_keeps_every_locator_given_for_its_element() -> None:
@@ -131,3 +204,49 @@ def test_a_txgenie_steps_locator_becomes_its_target() -> None:
     data_set = read_test_data(json.dumps({"test_cases": [case]}).encode(), "txgenie.json")
 
     assert [step.target for step in data_set.cases[0].steps] == ["[data-test='login-button']", "#user-name", None]
+
+
+# ---------- CSV in any other shape ----------
+
+def test_csv_with_other_columns_is_a_free_form_source() -> None:
+    from app.utils.TestDataParser import FreeFormSource, read_test_data
+
+    text = "\n\nTest Key,Summary,Step,Expected Result\nX-1,Login,Open the login page,The form is shown\n"
+
+    result = read_test_data(text.encode(), "xray-export.CSV")
+
+    assert result == FreeFormSource(source_format=TestDataFormat.CSV, text=text)
+
+
+def test_our_csv_columns_after_blank_lines_are_still_our_format() -> None:
+    from app.utils.TestDataParser import read_test_data
+
+    result = read_test_data(b"\n case_id , Title,ACTION,target\nC1,Login,open,https://x.test\n", "cases.csv")
+
+    assert result.source_format == TestDataFormat.CSV
+    assert [(case.id, case.steps[0].target) for case in result.cases] == [("C1", "https://x.test")]
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        (b"", "empty"),
+        (b"  \n\n", "empty"),
+        (b"Summary,Steps\n", "no rows below its header"),
+        (b"Summary,Steps\n , \n,,\n", "no rows below its header"),
+        (b"case_id,title,action\n", "no test cases"),  # our format, strict as before
+        (b"case_id,title,action\nC1,,click\n", "'title' is required"),
+        ("Summary\n" + "x" * (100 * 1024) + "\n", "at most 100 KB"),
+        ("case_id,title,action\nC1,T," + "x" * 140_000 + "\n", "not valid CSV"),  # was an unhandled error (500)
+    ],
+    ids=[
+        "no-bytes", "blank", "header-only", "blank-rows", "our-format-no-rows", "our-format-strict", "too-large",
+        "unreadable",
+    ],
+)
+def test_empty_or_too_large_csv_is_rejected(content: bytes | str, message: str) -> None:
+    from app.utils.TestDataParser import read_test_data
+
+    data = content.encode() if isinstance(content, str) else content
+    with pytest.raises(ValidationError, match=message):
+        read_test_data(data, "x.csv")

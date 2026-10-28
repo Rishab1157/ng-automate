@@ -11,7 +11,7 @@ from app.models.analyzerModel import FactSheetModel
 from app.models.healerModel import HealOutcomeModel
 from app.models.healMemoryModel import HealMemoryModel, HealMemoryResult
 from app.models.testRunModel import FailureKind, TestCommandModel, TestRunResultModel
-from app.utils.AgentPromptRules import PLAIN_TOOL_VALUES_RULE, VISIBLE_BROWSER_RULE, user_instructions_block
+from app.utils.AgentPromptRules import PLAIN_TOOL_VALUES_RULE, TERMINAL_RULE, VISIBLE_BROWSER_RULE, user_instructions_block
 
 MAX_OUTPUT_IN_PROMPT = 6000
 MAX_PREVIOUS_SUMMARY_CHARS = 300
@@ -88,9 +88,11 @@ Rules (every change you make is kept; a change that breaks them is reported to t
   place. For a new file, make its folder with `mkdir -p` first but never `touch` the file (the editor refuses to
   overwrite an existing file, so the file would stay empty). Do not edit them with sed, echo or other shell commands, do
   not create backup copies, and do not run git.
-- Put downloads and temporary files outside the project (for example in /tmp), never in /workspace/project.
+- Put downloads, temporary files and saved command output (`| tee`, `> file`) outside the project (for example in
+  /tmp), never in /workspace/project.
 - {screen_rule}
 - {plain_values}
+- {terminal_rule}
 - You may run the test command to check your fix{check_hint}.
   As soon as the command gets past this error, stop and reply.
 
@@ -142,6 +144,7 @@ def build_heal_prompt(
         marker=UNVERIFIED_MARKER,
         screen_rule=VISIBLE_BROWSER_RULE,
         plain_values=PLAIN_TOOL_VALUES_RULE,
+        terminal_rule=TERMINAL_RULE,
         check_hint=_CHECK_HINT.format(check=command.check) if command.check else "",
     )
 

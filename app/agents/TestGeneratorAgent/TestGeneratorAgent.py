@@ -30,6 +30,7 @@ from app.services.sandboxService.SandboxService import SANDBOX_PROJECT_DIR
 from app.agents.TestGeneratorAgent.GeneratedTestPlacement import (
     GENERATED_DIR,
     runnable_cases,
+    tests_not_run_by_default,
     unverified_locators,
 )
 from app.agents.TestGeneratorAgent.GenerationState import collect_state, describe_state
@@ -49,16 +50,15 @@ from app.models.testDataModel import TestDataSetModel
 from app.models.testGeneratorModel import GenerationOutcomeModel, SkippedCaseModel
 from app.models.testRunModel import TestCommandModel
 from app.utils.AgentConversationUtils import (
-    MODEL_UNREACHABLE_FROM_SANDBOX,
     AgentControl,
     EventForwarder,
     ask,
     build_condenser,
-    check_model_reachable,
+    check_model,
     close_conversation,
     secret_values,
 )
-from app.utils.LlmInstance import build_llm, sandbox_base_url
+from app.utils.LlmInstance import build_llm
 from app.utils.ProjectSnapshot import ProjectSnapshot, project_fingerprint
 
 logger = logging.getLogger(__name__)
@@ -134,10 +134,9 @@ class TestGeneratorAgent:
         cases, skipped = runnable_cases(data_set.cases)
         if not cases:
             raise ValidationError(ErrorMessages.NO_RUNNABLE_TEST_CASES)
-        unreachable = check_model_reachable(workspace, sandbox_base_url(self.llm_config.base_url))
-        if unreachable is not None:
-            reason = MODEL_UNREACHABLE_FROM_SANDBOX.format(reason=unreachable)
-            return GenerationOutcomeModel(summary=NO_SUMMARY, error=_generation_failed(reason).message)
+        problem = check_model(workspace, self.llm_config)
+        if problem is not None:
+            return GenerationOutcomeModel(summary=NO_SUMMARY, error=_generation_failed(problem).message)
 
         snapshot = ProjectSnapshot.capture(project_dir)
         had_git_dir = (snapshot.root / GIT_DIR).exists()
@@ -232,9 +231,13 @@ class TestGeneratorAgent:
             if not had_git_dir:
                 shutil.rmtree(snapshot.root / GIT_DIR, ignore_errors=True)
 
-        # Every change stays, exactly as the build check saw it: nothing is rolled back. Risky ones are reported.
+        # Every change stays, exactly as the build check saw it: nothing is rolled back. Risky ones are reported, and
+        # so are new test files the project's plain test command would skip.
         changes = snapshot.changes()
-        violations = check_changes(snapshot, changes, allow_deletes=False)
+        violations = [
+            *check_changes(snapshot, changes, allow_deletes=False),
+            *tests_not_run_by_default(snapshot.root, changes, command.tool),
+        ]
         flagged = sorted({violation.file for violation in violations})
         for path in flagged:
             rules = ", ".join(sorted({v.rule for v in violations if v.file == path}))

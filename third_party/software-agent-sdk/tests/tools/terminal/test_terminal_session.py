@@ -1155,3 +1155,21 @@ def test_pager_does_not_hijack_terminal(tmp_path, terminal_type):
         assert "diff --git" not in obs.text
     finally:
         session.close()
+
+
+@parametrize_terminal_types
+def test_command_not_found_says_what_to_check(terminal_type):
+    """NG Automate: exit code 127 comes with what it means and what to check."""
+    session = create_terminal_session(work_dir=os.getcwd(), terminal_type=terminal_type)
+    session.initialize()
+    try:
+        obs = _run_bash_action(session, "nonexistent_command_xyz --version")
+
+        assert obs.metadata.exit_code == 127
+        assert obs.metadata.suffix.startswith(
+            "\n[The command completed with exit code 127.]\n[Exit code 127: the "
+            "shell found no command with that name"
+        )
+        assert "`command -v NAME`" in obs.metadata.suffix
+    finally:
+        session.close()

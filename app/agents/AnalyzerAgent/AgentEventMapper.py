@@ -40,7 +40,11 @@ MODEL_QUOTA_EXCEEDED = "the usage quota or budget of the model is used up"
 MODEL_RATE_LIMITED = "the model is rate limited, try again later"
 MODEL_MISCONFIGURED = "the model is not available or the model connection is misconfigured"
 MODEL_UNREACHABLE = "the model could not be reached, try again later"
+MODEL_TIMED_OUT = "the model did not answer in time: it is busy or stuck, try again later"
 CONDENSED_MESSAGE = "The agent summarized {count} earlier steps to stay within the model's context"
+# A model call that got no answer in time (the SDK's own error, LiteLLM's and httpx's): the SDK files it with the
+# connection errors, but the model server was reached, it was busy or stuck.
+_MODEL_TIMEOUT_CODES = frozenset({"LLMTimeoutError", "Timeout", "ReadTimeout"})
 
 _FAILURE_REASONS: dict[FailureKind, str] = {
     FailureKind.AUTH: MODEL_AUTH_FAILED,
@@ -84,6 +88,8 @@ def describe_agent_failure(code: str | None, kind: FailureKind | None) -> str:
     """A short, safe reason for an agent that stopped with an error."""
     if code == MAX_ITERATIONS_CODE:
         return AGENT_OUT_OF_STEPS
+    if code in _MODEL_TIMEOUT_CODES:
+        return MODEL_TIMED_OUT
     return _FAILURE_REASONS.get(kind, AGENT_STOPPED) if kind else AGENT_STOPPED
 
 

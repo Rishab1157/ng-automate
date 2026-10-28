@@ -74,7 +74,7 @@ class TestDataService:
     ) -> TestDataUploadModel:
         """Ready at once for our own format; otherwise processing (the caller starts the processor)."""
         project = await self.project_service.get(project_id, org_id)
-        source = read_test_data(content, filename)
+        source = read_test_data(content, filename, await self.find_case_ids(project.id))
         # The original file is kept as it is, next to the project (the editor's "Test data" folder, and
         # /workspace/test-data in the sandbox). Its stored name is unique in the project.
         storage = self.project_service.storage
@@ -145,6 +145,15 @@ class TestDataService:
         )
         return [str(doc["_id"]) for doc in docs]
 
+    async def find_case_ids(self, project_id: str, exclude_id: str | None = None) -> set[str]:
+        """The case ids of the project's test data, but those of `exclude_id` (the source being read again). The ids
+        given to cases without one must not repeat them: tests are named after case ids."""
+        query: dict[str, Any] = {"project_id": ObjectId(project_id), "data_set": {"$ne": None}}
+        if exclude_id is not None:
+            query["_id"] = {"$ne": ObjectId(exclude_id)}
+        docs = await self.test_data_repo.find(query, {"data_set.cases.id": 1})
+        return {case["id"] for doc in docs for case in doc["data_set"].get("cases") or [] if case.get("id")}
+
     async def update_cases(
         self, test_data_id: str, project_id: str, org_id: str, cases: list[TestCaseSpecModel]
     ) -> TestDataUploadModel:
@@ -152,7 +161,8 @@ class TestDataService:
         upload = await self.get(test_data_id, project_id, org_id)
         if upload.status != TestDataStatus.READY:
             raise ValidationError(ErrorMessages.TEST_DATA_NOT_READY.format(status=upload.status.value))
-        data_set = build_test_data_set(cases, upload.source_format)
+        taken_ids = await self.find_case_ids(upload.project_id, test_data_id)
+        data_set = build_test_data_set(cases, upload.source_format, taken_ids)
         await self._set(test_data_id, {
             "data_set": data_set.model_dump(mode="json"),
             "case_count": len(data_set.cases),
@@ -193,7 +203,7 @@ class TestDataService:
         if await self.run_service.has_active_run(upload.project_id, org_id):
             raise ProjectBusyError(ErrorMessages.PROJECT_BUSY)
         data = content.encode("utf-8")
-        source = read_test_data(data, upload.filename)
+        source = read_test_data(data, upload.filename, await self.find_case_ids(upload.project_id, test_data_id))
         fields: dict[str, Any] = {"source_format": TestDataFormat(source.source_format).value, "error": None}
         if isinstance(source, FreeFormSource):
             connection_id = await self.model_connection_service.connection_for_request(

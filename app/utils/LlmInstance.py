@@ -1,5 +1,7 @@
-"""Build the LLM an OpenHands agent talks to."""
+"""Build the LLM an OpenHands agent talks to, and check that a self-hosted one answers before an agent uses it."""
 
+import ipaddress
+import logging
 import os
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
@@ -8,8 +10,14 @@ from app.config import settings
 from app.models.llmModel import LlmConfigModel
 from app.models.modelConnectionModel import ModelConnectionSourceModel
 
+logger = logging.getLogger(__name__)
+
 # Hosts that mean "the machine this process runs on". Inside a sandbox container they point at the container.
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+MODEL_NOT_ANSWERING = (
+    "the model server is up but did not answer a 1-token request within {seconds} s: it is busy or stuck, try again "
+    "later"
+)
 
 if TYPE_CHECKING:
     # The OpenHands SDK (and LiteLLM under it) takes seconds to import: only agents load it, not the API.
@@ -88,8 +96,55 @@ def build_llm(config: LlmConfigModel) -> "LLM":
         max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
         timeout=settings.LLM_TIMEOUT_SECONDS,
         num_retries=settings.LLM_NUM_RETRIES,
+        # Pauses before the next tries: min, 2 x min, 4 x min, ... at most max (the SDK doubles its multiplier per try).
+        retry_min_wait=settings.LLM_RETRY_MIN_WAIT_SECONDS,
+        retry_max_wait=settings.LLM_RETRY_MAX_WAIT_SECONDS,
+        retry_multiplier=settings.LLM_RETRY_MIN_WAIT_SECONDS,
         **options,
     )
+
+
+def is_self_hosted(base_url: str | None) -> bool:
+    """A model server on this machine or its local network: a private or loopback address, or a host name without a
+    domain (localhost, a container's name, the sandbox's host alias). Asking it costs nothing, unlike a hosted gateway,
+    where every request is paid for."""
+    host = urlsplit(base_url).hostname if base_url else None
+    if not host:
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return "." not in host or host == settings.SANDBOX_HOST_ALIAS
+    return address.is_private or address.is_loopback
+
+
+def check_model_answers(config: LlmConfigModel) -> str | None:
+    """None when a self-hosted model answers a 1-token request within MODEL_ANSWER_CHECK_SECONDS (0: not checked),
+    else why not.
+
+    Asked once before an agent starts or test data is read: that its server answers HTTP shows only that it is up, and
+    a stuck one held a real run for the full timeout on every try. A hosted model is never asked (every request to it
+    is paid for). An error other than no answer in time is left to the real calls, which report it.
+    """
+    seconds = settings.MODEL_ANSWER_CHECK_SECONDS
+    if seconds <= 0 or not is_self_hosted(config.base_url):
+        return None
+    from openhands.sdk.llm import Message, TextContent
+    from openhands.sdk.llm.exceptions import LLMTimeoutError
+
+    one_token: dict[str, Any] = {"max_output_tokens": 1, "timeout": seconds, "num_retries": 1}
+    if config.num_ctx:
+        # Ollama: the context size the agents use (another one makes it load the model again), and one token.
+        one_token["litellm_extra_body"] = {"options": {"num_ctx": config.num_ctx, "num_predict": 1}}
+    # Asked from this process: the configured URL, not the sandbox's alias for it.
+    llm = build_llm(config).model_copy(update={"base_url": config.base_url, **one_token})
+    try:
+        llm.completion([Message(role="user", content=[TextContent(text="Reply with OK.")])])
+    except LLMTimeoutError:
+        return MODEL_NOT_ANSWERING.format(seconds=seconds)
+    except Exception as error:
+        logger.info("The model check got %s: left to the agents' own calls", type(error).__name__)
+    return None
 
 
 def llm_config_from_connection(source: ModelConnectionSourceModel) -> LlmConfigModel:

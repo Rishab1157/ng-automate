@@ -150,6 +150,9 @@ class FileEditor:
         elif command == "create":
             if file_text is None:
                 raise EditorToolParameterMissingError(command, "file_text")
+            # NG Automate: a new file may go in a new folder. Without this, every
+            # create there failed on the temp file and the model sent it again.
+            self._create_parent_folders(_path)
             self.write_file(_path, file_text)
             self._history_manager.add_history(_path, file_text)
             return FileEditorObservation.from_text(
@@ -331,8 +334,8 @@ class FileEditor:
                 raise EditorToolParameterInvalidError(
                     "view_range",
                     str(view_range),
-                    "The `view_range` parameter is not allowed when `path` points to "
-                    "a directory.",
+                    f"view_range works on files only, and {path} is a folder. View "
+                    "the folder without view_range, or view one of its files.",
                 )
 
             try:
@@ -422,7 +425,8 @@ class FileEditor:
             raise EditorToolParameterInvalidError(
                 "view_range",
                 str(view_range),
-                "It should be a list of two integers.",
+                "It should be a list of two integers, [start_line, end_line], such "
+                "as [1, 40]; [start_line, -1] shows the rest of the file.",
             )
 
         start_line, end_line = view_range
@@ -430,8 +434,12 @@ class FileEditor:
             raise EditorToolParameterInvalidError(
                 "view_range",
                 str(view_range),
-                f"Its first element `{start_line}` should be within the range of "
-                f"lines of the file: {[1, num_lines]}.",
+                "The file is empty (0 lines), so there are no lines to show. View "
+                "it without view_range."
+                if num_lines == 0
+                else f"The file has {num_lines} lines, so the start line must be 1 "
+                f"to {num_lines}. Use for example [1, {num_lines}], or view the file "
+                "without view_range.",
             )
 
         # Normalize end_line and provide a warning if it exceeds file length
@@ -449,8 +457,9 @@ class FileEditor:
             raise EditorToolParameterInvalidError(
                 "view_range",
                 str(view_range),
-                f"Its second element `{end_line}` should be greater than or equal "
-                f"to the first element `{start_line}`.",
+                f"The end line {end_line} is before the start line {start_line}. "
+                f"Use [{start_line}, -1] to see from line {start_line} to the end of "
+                f"the file, or an end line of at least {start_line}.",
             )
 
         file_content = self.read_file(path, start_line=start_line, end_line=end_line)
@@ -517,7 +526,31 @@ class FileEditor:
         try:
             self._atomic_write(path, file_text, encoding)
         except Exception as e:
-            raise ToolError(f"Ran into {e} while trying to write to {path}") from None
+            # NG Automate: an OS error names the temp file the write goes through,
+            # which the model never asked for: name the file it asked for instead.
+            reason = e.strerror if isinstance(e, OSError) and e.strerror else e
+            raise ToolError(
+                f"Could not write {path}: {reason}. Check that its folder "
+                f"{path.parent} exists and can be written to."
+            ) from None
+
+    def _create_parent_folders(self, path: Path) -> None:
+        """Create the folders of a new file's path that do not exist yet."""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            existing = next((p for p in path.parents if p.exists()), None)
+            if existing is not None and not existing.is_dir():
+                raise ToolError(
+                    f"Cannot create {path}: {existing} is a file, not a folder, so "
+                    f"nothing can be created in it. Choose another path (`view "
+                    f"{existing.parent}` shows what is there)."
+                ) from None
+            raise ToolError(
+                f"Cannot create the folder {path.parent} for the new file: "
+                f"{e.strerror or e}. Check the path, or create the file in a folder "
+                "that can be written to."
+            ) from None
 
     def _atomic_write(self, path: Path, file_text: str, encoding: str) -> None:
         """Write file_text to path atomically, never leaving a truncated file.
@@ -597,7 +630,9 @@ class FileEditor:
             raise EditorToolParameterInvalidError(
                 "insert_line",
                 str(insert_line),
-                f"It should be within the range of allowed values: {[0, num_lines]}",
+                f"The file has {num_lines} lines, so insert_line must be 0 to "
+                f"{num_lines}: new_str goes after that line (0 puts it at the top, "
+                f"{num_lines} at the end). `view` the file to see its line numbers.",
             )
 
         new_str_lines = new_str.split("\n")
@@ -687,28 +722,54 @@ class FileEditor:
                 suggestion_message,
             )
 
-        # Check if path and command are compatible
+        # Check if path and command are compatible. NG Automate: each message also
+        # says what to do next, so the model does not send the same call again.
         if command == "create" and path.exists():
             raise EditorToolParameterInvalidError(
                 "path",
                 str(path),
-                f"File already exists at: {path}. Cannot overwrite files using "
-                "command `create`.",
+                f"It is a folder, and `create` makes files: add the new file's name "
+                f"to the path (`view {path}` shows what the folder has)."
+                if path.is_dir()
+                else "A file already exists there, and `create` never overwrites "
+                "one. To change it, `view` it and edit it with `str_replace`; for a "
+                "new file, pick another name.",
             )
         if command != "create" and not path.exists():
             raise EditorToolParameterInvalidError(
                 "path",
                 str(path),
-                f"The path {path} does not exist. Please provide a valid path.",
+                self._missing_path_hint(command, path),
             )
         if command != "view":
             if path.is_dir():
                 raise EditorToolParameterInvalidError(
                     "path",
                     str(path),
-                    f"The path {path} is a directory and only the `view` command can "
-                    "be used on directories.",
+                    f"It is a folder, and only `view` works on folders. `view {path}` "
+                    "lists its files; use the path of the file you mean.",
                 )
+
+    @staticmethod
+    def _missing_path_hint(command: CommandLiteral, path: Path) -> str:
+        """What to try when `path` does not exist (any command but `create`)."""
+        folder = next((p for p in path.parents if p.is_dir()), None)
+        if folder is None:
+            hint = "This path does not exist. Check it, or find the file with glob"
+        elif folder == path.parent:
+            hint = (
+                f"This path does not exist. Check the name with `view {folder}` or "
+                "find the file with glob"
+            )
+        else:
+            hint = (
+                f"This path does not exist, and neither does its folder "
+                f"{path.parent}. Check the path with `view {folder}` (the nearest "
+                "folder that exists) or find the file with glob"
+            )
+        if command == "undo_edit":
+            return f"{hint}."
+        return f"{hint}; use `create` for a new file."
 
     def undo_edit(self, path: Path) -> FileEditorObservation:
         """

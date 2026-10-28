@@ -29,8 +29,8 @@ class GlobAction(Action):
     path: str | None = Field(
         default=None,
         description=(
-            "The directory (absolute path) to search in. "
-            "Defaults to the current working directory."
+            "The directory to search in: an absolute path, or a path relative to "
+            "the working directory. Defaults to the current working directory."
         ),
     )
 

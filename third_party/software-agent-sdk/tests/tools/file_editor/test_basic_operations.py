@@ -333,6 +333,25 @@ def test_create_file(editor):
     assert "File created successfully" in result.text
 
 
+def test_create_makes_missing_parent_folders(editor):
+    """NG Automate: `create` makes the folders of a new file's path."""
+    editor, test_file = editor
+    new_file = test_file.parent / "features" / "ngauto" / "Login.feature"
+    result = editor(command="create", path=str(new_file), file_text="Feature: x\n")
+    assert new_file.read_text() == "Feature: x\n"
+    assert "File created successfully" in result.text
+    assert [p.name for p in new_file.parent.iterdir()] == ["Login.feature"]
+
+
+def test_create_under_a_file_says_it_is_a_file(editor):
+    """NG Automate: a file in the way of the new folders is named, nothing is made."""
+    editor, test_file = editor
+    with pytest.raises(ToolError) as exc_info:
+        editor(command="create", path=str(test_file / "sub" / "a.txt"), file_text="x")
+    assert f"{test_file} is a file, not a folder" in exc_info.value.message
+    assert test_file.read_text().startswith("This is a test file.")
+
+
 def test_create_with_empty_string(editor):
     editor, test_file = editor
     new_file = test_file.parent / "empty_content.txt"
@@ -536,7 +555,7 @@ def test_insert_invalid_line(editor):
             new_str="Invalid Insert",
         )
     assert "Invalid `insert_line` parameter" in str(exc_info.value.message)
-    assert "It should be within the range of allowed values:" in str(
+    assert "The file has 2 lines, so insert_line must be 0 to 2" in str(
         exc_info.value.message
     )
 

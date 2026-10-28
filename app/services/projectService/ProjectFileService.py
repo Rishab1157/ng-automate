@@ -8,14 +8,24 @@ agents work on a copy and their changes come back when the run completes.
 import asyncio
 import os
 import re
+import shutil
+import tempfile
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.exceptions import ErrorMessages, NotFoundError, PayloadTooLargeError, ProjectBusyError, ValidationError
-from app.models.projectFileModel import FileContentModel, FileNodeModel, FileTreeModel, ProjectFileRoot, RunFilesModel
+from app.models.projectFileModel import (
+    FileContentModel,
+    FileNodeModel,
+    FileTreeModel,
+    ProjectDownloadModel,
+    ProjectFileRoot,
+    RunFilesModel,
+)
 from app.agents.RunnerAgent.TestCommandResolver import is_test_file, read_small_text
-from app.utils.ArchiveUtils import SKIPPED_DIRS
+from app.utils.ArchiveUtils import EXPORT_SKIPPED_DIRS, SKIPPED_DIRS, create_archive
 from app.utils.ProjectSnapshot import compare_projects, is_in_flight_write
 
 from .ProjectService import ProjectService
@@ -31,6 +41,9 @@ MAX_TREE_ENTRIES = 5000
 # Folders users never edit; .git also must never be written.
 HIDDEN_DIRS = SKIPPED_DIRS
 _DRIVE = re.compile(r"^[A-Za-z]:")
+MAX_DOWNLOAD_NAME_CHARS = 100
+# Characters Windows and most tools do not accept in a file name.
+_UNSAFE_FILE_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]+')
 
 
 class ProjectFileService:
@@ -105,6 +118,20 @@ class ProjectFileService:
         folder = Path(run.outputs.project_dir) if run.outputs.project_dir else None
         return run, folder if folder is not None and folder.is_dir() else None
 
+    async def download(self, project_id: str, org_id: str) -> ProjectDownloadModel:
+        """The project's editable copy as a new zip, without tool folders and test results. The zip is made in a
+        temporary folder of its own: the caller removes the folder once it has been sent."""
+        project = await self.project_service.get(project_id, org_id)
+        working = await asyncio.to_thread(self.storage.ensure_working_copy, project.id)
+        folder = Path(tempfile.mkdtemp(prefix="ngauto-download-"))
+        try:
+            path = folder / "project.zip"
+            await asyncio.to_thread(create_archive, working, path, EXPORT_SKIPPED_DIRS)
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
+        return ProjectDownloadModel(folder=folder, path=path, filename=download_name(project.name))
+
     async def file_path(self, project_id: str, org_id: str, root: ProjectFileRoot, path: str) -> Path:
         """The file on disk (for reading or downloading); NotFoundError when it is not there."""
         await self.project_service.get(project_id, org_id)
@@ -116,6 +143,13 @@ class ProjectFileService:
         if not target.is_file():
             raise NotFoundError(ErrorMessages.FILE_NOT_FOUND)
         return target
+
+
+def download_name(project_name: str, now: datetime | None = None) -> str:
+    """The download's file name: <project name>-<YYYYMMDD-HHMMSS>.zip (UTC), with only characters every system
+    accepts in a file name."""
+    name = _UNSAFE_FILE_NAME_CHARS.sub("_", project_name).strip(" .")[:MAX_DOWNLOAD_NAME_CHARS].strip(" .")
+    return f"{name or 'project'}-{(now or datetime.now(UTC)):%Y%m%d-%H%M%S}.zip"
 
 
 def _clean(path: str) -> str:

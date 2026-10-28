@@ -48,6 +48,11 @@ class GitFetchError(NgAutomateException):
         super().__init__(message, ErrorCode.GIT_FETCH_FAILED, status_code=422, details=details)
 
 
+class GitPushError(NgAutomateException):
+    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message, ErrorCode.GIT_PUSH_FAILED, status_code=422, details=details)
+
+
 class SandboxError(NgAutomateException):
     def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__(message, ErrorCode.SANDBOX_FAILED, status_code=503, details=details)

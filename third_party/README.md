@@ -33,7 +33,57 @@ Local changes to send upstream (each is small and keeps the old behaviour by def
    - Upstream test changed: tests/tools/file_editor/test_basic_operations.py::test_str_replace_with_empty_old_str
      (the message no longer lists every line). Tests: tests/test_file_editor_hints.py (in ng-automate).
 
+4. openhands-tools/openhands/tools/file_editor/editor.py (FileEditor)
+   - `create` makes the missing folders of the new file's path (after the same path checks as before). Why: the
+     write goes through a temp file in the file's folder, so in a new folder every create failed with
+     "[Errno 2] No such file or directory: '.../.Name.feature.xxxx.tmp'" and gpt-4o sent the same create 6 times.
+   - Clearer errors (what happened, why, what to try): a path that does not exist (names the nearest folder that
+     exists), create on an existing file or folder, a folder where a file is expected, a bad view_range or
+     insert_line (says how many lines the file has), and a failed write (names the file, not the temp file).
+     Only the messages change. Upstream tests changed: test_error_handling.py, test_basic_operations.py.
+
+5. openhands-tools/openhands/tools/terminal (constants.py, terminal/terminal_session.py, impl.py)
+   - Exit codes 127 (command not found) and 126 (cannot run) say what they mean and what to check.
+   - Timeout messages say what to do. A pooled terminal (tmux, what the sandboxes use) stops a command that is
+     still running before it runs the next one there (TerminalExecutor._prepare_pooled_session), so upstream's
+     advice to wait with '' or send keys only failed with "No previous running command ..." there; a pooled
+     session now says to run the command again with a larger `timeout`. Only the messages change.
+     Upstream test helper changed: tests/tools/terminal/conftest.py::get_no_change_timeout_suffix.
+
+6. openhands-sdk/openhands/sdk/agent/repeated_failures.py (new) + a hook in agent.py (_ActionBatch.emit, which
+   both the sync and the async loop use for every executed call, parallel ones included)
+   - Per conversation, the failed results in a row of each call (tool name + its arguments as sorted JSON, long
+     strings as their sha1) are counted; a success of that call starts again. From the 3rd failure on, the error
+     the model reads ends with a note that repeating the exact call will not help. Nothing is skipped, blocked or
+     stopped, and the StuckDetector is unchanged (for an ObservationEvent the note is in extended_content, so the
+     observation it compares is the same). Tests: tests/sdk/agent/test_repeated_failures.py.
+
+7. openhands-tools/openhands/tools (grep/impl.py, grep/definition.py, glob/impl.py, glob/definition.py, utils/__init__.py)
+   - grep `include` matched only the bare file name with fnmatch, so "**/*.java", "src/test/java/**/*.java" and the
+     tool's own example form "*.{ts,tsx}" always gave "No files found" (65 of 92 grep calls in real runs; the agents
+     then guessed imports). include now follows ripgrep's -g rules for every backend: without "/" it matches the file
+     name in any folder (as before), with "/" the path relative to the searched folder ("**" = any folders), and
+     {a,b} is expanded (_expand_braces, max 1000 patterns). ripgrep itself no longer gets -g: it read globs with "/"
+     relative to the server's own folder, so they found nothing there either.
+   - The system grep (what the agent image has: no ripgrep) searched the regex as a basic regex, so "public|artifactId"
+     was taken literally. It now runs `grep -P` (Perl-compatible, like Python's re). When grep or ripgrep cannot take
+     the regex (exit code 2: look-arounds in ripgrep, Python-only escapes such as \N{...}), the Python search answers
+     instead of a false "No files found"; so does a regex that spans lines. The pattern goes after -e (a pattern such
+     as "-x" was read as an option), and the Python search now matches ^/$ per line and skips binary files, like grep.
+     On Windows, Git's grep (an MSYS program) expanded wildcards in the regex and lost its backslashes: MSYS=noglob.
+   - A relative `path` started at the server's own folder ("not a valid directory"); it now starts at the working
+     directory (grep and glob). Absolute paths work as before.
+   - Actionable messages when nothing matched: include names a folder (use path), include is a list ("*.java,*.xml":
+     use braces, with the exact include to send), include with "/" (what it is relative to); a file passed as path;
+     glob pattern naming a folder (use "folder/**/*"). glob's Python fallback expands braces ("**/*.{json,yaml}", the
+     tool's own example, found nothing), an absolute pattern plus path now searches the pattern's folder, and a
+     ripgrep error is reported instead of "No files found".
+     Tests: tests/tools/grep/test_grep_include_and_path.py, tests/tools/glob/test_glob_braces_and_path.py,
+     tests/tools/test_brace_expansion.py.
+
 The sandboxes run THIS code: NG Automate builds its agent server image from this folder with OpenHands' own recipe
 (openhands-agent-server/openhands/agent_server/docker/Dockerfile, target `source`; see docker-compose.yml,
 service agent-server), and docker/sandbox-test/Dockerfile builds on it. So a change here reaches the agents after
-`docker compose --profile build build agent-server sandbox-test`.
+`docker compose --profile build build agent-server` and THEN `docker compose --profile build build sandbox-test`:
+two commands, in this order. One command for both builds them at the same time, so sandbox-test gets the old
+agent-server image as its base.

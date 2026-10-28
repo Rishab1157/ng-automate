@@ -16,6 +16,10 @@ MAX_FILES = 100_000
 MAX_UNZIP_FACTOR = 5
 # Generated or tool folders: large, rebuilt in the sandbox, never needed in a snapshot.
 SKIPPED_DIRS = frozenset({".git", "node_modules", "target", ".venv", "venv", "__pycache__", ".gradle", ".idea"})
+# What test runs leave in a project: results and reports (Maven's are in target/, skipped already).
+RUN_ARTIFACT_DIRS = frozenset({"ngauto-results", "test-results", "playwright-report", "allure-results"})
+# Left out when a project leaves NG Automate (its download, a push to its repository).
+EXPORT_SKIPPED_DIRS = SKIPPED_DIRS | RUN_ARTIFACT_DIRS
 _CHUNK_BYTES = 1024 * 1024
 # Raised while reading a damaged entry. RuntimeError: encrypted entry; NotImplementedError: unsupported compression.
 _DAMAGED_ENTRY_ERRORS = (zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError, RuntimeError)
@@ -82,17 +86,17 @@ def extract_archive(archive_path: Path, destination: Path, max_bytes: int) -> No
         raise _invalid(ErrorMessages.INVALID_ZIP) from None
 
 
-def create_archive(source_dir: Path, destination: Path) -> None:
-    """Zip a folder, leaving out SKIPPED_DIRS and symbolic links."""
+def create_archive(source_dir: Path, destination: Path, skipped_dirs: frozenset[str] = SKIPPED_DIRS) -> None:
+    """Zip a folder, leaving out `skipped_dirs` and links."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for file in _iter_files(source_dir):
+        for file in iter_files(source_dir, skipped_dirs):
             archive.write(file, file.relative_to(source_dir).as_posix())
 
 
 def directory_size(source_dir: Path) -> int:
     """Total size of the files create_archive would include."""
-    return sum(file.stat().st_size for file in _iter_files(source_dir))
+    return sum(file.stat().st_size for file in iter_files(source_dir))
 
 
 def sha256_file(path: Path) -> str:
@@ -118,14 +122,20 @@ def _extraction_target(root: Path, name: str) -> Path:
     return target
 
 
-def _iter_files(source_dir: Path) -> Iterator[Path]:
+def iter_files(source_dir: Path, skipped_dirs: frozenset[str] = SKIPPED_DIRS) -> Iterator[Path]:
+    """The folder's files, without `skipped_dirs` and links: a link (or a Windows junction) can point anywhere on the
+    server, so it is never followed."""
     for root, dirs, files in os.walk(source_dir):
         root_path = Path(root)
-        dirs[:] = [d for d in dirs if d not in SKIPPED_DIRS and not (root_path / d).is_symlink()]
+        dirs[:] = [d for d in dirs if d not in skipped_dirs and not _is_link(root_path / d)]
         for name in files:
             file = root_path / name
             if not file.is_symlink():
                 yield file
+
+
+def _is_link(path: Path) -> bool:
+    return path.is_symlink() or path.is_junction()
 
 
 def _invalid(message: str) -> ValidationError:
