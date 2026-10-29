@@ -92,6 +92,13 @@ class Settings(BaseSettings):
     ANALYZER_REPAIR_ATTEMPTS: int = 2
     # Tries of the strict-JSON formatter (schema-constrained LLM call), the last resort.
     STRUCTURED_OUTPUT_ATTEMPTS: int = 2
+    # Longest answer of one schema-constrained call (the test-data reader's, the analyzer's formatter's). Without a cap
+    # Ollama writes until its context is full: a model that repeated itself took 20 min per try (the timeout).
+    STRUCTURED_OUTPUT_MAX_TOKENS: int = 8192
+    # Longest string in such an answer from an Ollama model, which keeps to it while writing (JSON schema maxLength): a
+    # model that made up "the 31 letters" a step asked for wrote 1234567890... until it was cut off. Now the string ends
+    # here and the answer goes on (the test-data reader then drops the made-up value: it is not in the source).
+    STRUCTURED_OUTPUT_MAX_STRING_CHARS: int = 2000
 
     # Runner and healer
     TEST_RUN_TIMEOUT_SECONDS: int = 1800

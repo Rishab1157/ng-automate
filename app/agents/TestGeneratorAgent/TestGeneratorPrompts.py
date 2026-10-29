@@ -132,6 +132,10 @@ reports. A badly broken file of your own is easiest to rewrite: `rm` it, then `c
 
 _CHECK_LINE ="NG Automate checks your files after each batch, without running the tests, with: {check}"
 _NO_CHECK_LINE = "This project has no quick check that builds or loads the tests without running them."
+_NOT_BUILDING_LINE = (
+    "The project does not build as it is (`{check}` failed before your work), so NG Automate cannot check your files "
+    "by building them."
+)
 # Done means the project's own tooling finds and runs the new tests: a build or load check alone does not show that
 # (a real run: feature files the build never copied and no runner, so not one scenario ran, after a passing check).
 _RUNS_RULE = (
@@ -143,9 +147,18 @@ _CHECK_RULE = (
     "Before you finish, run `{check}` and fix every error it reports. Then make sure that every file and name you "
     f"import or call really exists, {_RUNS_RULE}. Do not run the whole suite."
 )
-_NO_CHECK_RULE = (
-    "This project has no quick check: before you finish, read each new file once more and make sure that every file "
-    f"and name you import or call really exists, {_RUNS_RULE}. Do not run the whole suite."
+_READ_BACK_RULE = (
+    "before you finish, read each new file once more and make sure that every file and name you import or call really "
+    f"exists, {_RUNS_RULE}. Do not run the whole suite."
+)
+_NO_CHECK_RULE = f"This project has no quick check: {_READ_BACK_RULE}"
+# A real run: told to fix every error the check reports on a project that never built (jars it needs are not in git),
+# the generator cut its pom.xml down with sed and downloaded jars, then asked the user for jar URLs in its summary.
+_NOT_BUILDING_RULE = (
+    "The project did not build before your work, and that problem is not your task: do not rewrite build files or "
+    "download libraries to fix it, and never remove existing dependencies or configuration. Write the tests with the "
+    f"code that exists (search the project for it), and {_READ_BACK_RULE} In your summary, also say what blocks the "
+    "build."
 )
 
 
@@ -157,16 +170,22 @@ def build_generate_prompt(
     total_cases: int | None = None,
     briefing: str = "",
     instructions: Sequence[str] = (),
+    broken_before: bool = False,
 ) -> str:
     """The first message: the project, the first cases, the user's instructions and the rules (`total_cases` when more
-    cases follow)."""
+    cases follow). `broken_before`: the project's check failed before any test was added (not the generator's task)."""
     total = total_cases or len(cases)
+    check_line, check_rule = (
+        (_NO_CHECK_LINE, _NO_CHECK_RULE) if not command.check
+        else (_NOT_BUILDING_LINE, _NOT_BUILDING_RULE) if broken_before
+        else (_CHECK_LINE, _CHECK_RULE)
+    )
     return _GENERATE_PROMPT.format(
         stack=_stack(fact_sheet),
         architecture=_text(findings.architecture_pattern) if findings else "unknown",
         important_paths=_important_paths(findings),
         command=command.command,
-        check_line=_CHECK_LINE.format(check=command.check) if command.check else _NO_CHECK_LINE,
+        check_line=check_line.format(check=command.check),
         briefing=_briefing_section(briefing),
         batch_note=_BATCH_NOTE.format(last=len(cases), total=total) if total > len(cases) else "",
         cases="\n".join(_case(case) for case in cases),
@@ -174,7 +193,7 @@ def build_generate_prompt(
         generated_dir=GENERATED_DIR,
         screen_rule=VISIBLE_BROWSER_RULE,
         marker=UNVERIFIED_MARKER,
-        check_rule=_CHECK_RULE.format(check=command.check) if command.check else _NO_CHECK_RULE,
+        check_rule=check_rule.format(check=command.check),
         plain_values=PLAIN_TOOL_VALUES_RULE,
         terminal_rule=TERMINAL_RULE,
     )

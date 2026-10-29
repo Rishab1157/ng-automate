@@ -32,7 +32,8 @@ class FakeLiteLLM:
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):
             raise reply
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=reply))])
+        content, finish_reason = reply if isinstance(reply, tuple) else (reply, "stop")
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content), finish_reason=finish_reason)])
 
 
 @pytest.fixture
@@ -72,6 +73,74 @@ def test_gives_up_with_the_last_reason(fake) -> None:
     fake("nope", "still nope")
 
     with pytest.raises(ValueError, match="bad reply"):
+        complete_json(CONFIG, "i", "t", "thing", SCHEMA, _parse, attempts=2)
+
+
+def test_the_answer_is_capped_so_a_model_that_repeats_itself_stops(fake) -> None:
+    llm = fake('{"x": 7}')
+
+    complete_json(CONFIG, "i", "t", "thing", SCHEMA, _parse)
+
+    assert llm.calls[0]["max_tokens"] == settings.STRUCTURED_OUTPUT_MAX_TOKENS
+
+
+def test_a_cut_off_answer_is_tried_again_with_what_went_wrong(fake) -> None:
+    # A real run: the model repeated itself until Ollama's context was full, 20 min per try, and the same request at
+    # temperature 0 repeats itself the same way.
+    llm = fake(('{"x": 1, "x": 1, "x": 1', "length"), '{"x": 3}')
+    used: list[Any] = []
+
+    assert complete_json(CONFIG, "i", "t", "thing", SCHEMA, _parse, attempts=2, on_usage=used.append) == 3
+
+    retry = llm.calls[1]["messages"]
+    assert retry[-1] == {"role": "user", "content": StructuredOutput.CUT_OFF_RETRY}
+    assert all(message["role"] != "assistant" for message in retry)  # the unfinished answer is not sent back
+    assert len(used) == 2  # the cut-off try used tokens too
+
+
+def test_an_ollama_model_gets_every_string_capped_so_a_runaway_string_ends(fake) -> None:
+    # A real run: the free model made up "the 31 letters" a step asked for as 1234567890... and never closed the string.
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "code": {"type": "string", "maxLength": 5},
+            "note": {"type": ["string", "null"]},
+            "count": {"type": "integer"},
+            "steps": {"type": "array", "items": {"type": "object", "properties": {"type": {"type": "string"}}}},
+            "tags": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["name", "type"],
+    }
+    original = json.loads(json.dumps(schema))
+    llm = fake('{"x": 1}')
+    ollama = LlmConfigModel(model="ollama_chat/qwen2.5-coder:14b", base_url="http://10.0.0.5:11435", num_ctx=32768)
+
+    complete_json(ollama, "i", "t", "thing", schema, _parse)
+
+    sent = llm.calls[0]["response_format"]["json_schema"]["schema"]["properties"]
+    limit = settings.STRUCTURED_OUTPUT_MAX_STRING_CHARS
+    assert sent["name"]["maxLength"] == limit and sent["note"]["maxLength"] == limit
+    assert sent["tags"]["items"]["maxLength"] == limit
+    assert sent["steps"]["items"]["properties"]["type"]["maxLength"] == limit  # a property named "type"
+    assert sent["code"]["maxLength"] == 5  # the schema's own cap is kept
+    assert "maxLength" not in sent["count"]
+    assert schema == original  # the caller's schema is not changed
+
+
+def test_a_hosted_model_gets_the_schema_as_it_is(fake) -> None:
+    llm = fake('{"x": 1}')
+
+    complete_json(CONFIG, "i", "t", "thing", SCHEMA, _parse)
+
+    assert llm.calls[0]["response_format"]["json_schema"]["schema"] == SCHEMA
+    assert "maxLength" not in json.dumps(llm.calls[0]["response_format"])
+
+
+def test_an_answer_cut_off_every_time_gives_up_with_that_reason(fake) -> None:
+    fake(("{", "length"), ("{", "length"))
+
+    with pytest.raises(ValueError, match=f"cut off at {settings.STRUCTURED_OUTPUT_MAX_TOKENS} tokens"):
         complete_json(CONFIG, "i", "t", "thing", SCHEMA, _parse, attempts=2)
 
 

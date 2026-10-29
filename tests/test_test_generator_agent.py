@@ -509,6 +509,7 @@ def test_build_errors_go_back_to_the_generator_until_the_tests_build(
 
     [fake] = created
     assert len(fake.messages) == 2
+    assert "that problem is not your task" not in fake.messages[0]  # the project built before
     fix = fake.messages[1]
     assert "The check `mvn -B -ntp -q -DskipTests test-compile` fails with the files you wrote" in fix
     assert "cannot find symbol" in fix and "class LoginPage" in fix
@@ -533,6 +534,24 @@ def test_a_project_that_did_not_build_before_is_not_checked(
     assert len(created[0].messages) == 1  # the project's own errors never go to the generator
     assert outcome.builds is None
     assert any("does not build before any test is added" in e.message for e in events)
+
+
+def test_the_generator_is_told_that_a_project_which_did_not_build_before_is_not_its_task(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
+    # A real run: on a project that never built, the generator tried to fix that build (sed on pom.xml, downloaded jars)
+    # instead of only writing its tests. A later batch must not announce a check that never runs, either.
+    project = _project(tmp_path)
+    workspace = BuildWorkspace(project, [(1, COMPILE_ERROR)])
+    created = conversation(edit=_writes_feature(project))
+    agent = TestGeneratorAgent(LlmConfigModel(model="openai/gpt-4o"), max_iterations=5, fix_rounds=2, batch_size=1)
+
+    agent.generate(workspace, project, DATA, FACT_SHEET, FINDINGS, CHECKED)
+
+    first, second = created[0].messages[:2]  # one case per batch
+    assert "that problem is not your task" in first
+    assert "NG Automate checks your files after each batch" not in first
+    assert "Where the work stands" in second and "has not run yet" not in second
 
 
 def test_tests_that_never_build_are_left_to_the_healer(

@@ -54,8 +54,12 @@ NETWORK_LABEL = "ngauto.sandboxes=1"
 # (host.docker.internal, the network's gateway, its LAN addresses), the LAN and cloud metadata endpoints. The internet
 # stays open (package downloads), and answers on connections made into the sandbox (agent server, live view) still go.
 BLOCKED_NETWORKS = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16")
+# The agent server keeps each conversation's state under a path relative to its working folder, which is the project:
+# its lock file (workspace/conversations/<id>/.owner_lease.lock) was left in a generated project, where a download or
+# a push would take it along. OH_CONVERSATIONS_PATH (the agent server's setting) puts that state outside the project.
+SANDBOX_CONVERSATIONS_DIR = "/tmp/ngauto-conversations"
 # Every sandbox: without NET_RAW, root in it (agents have sudo) cannot send hand-made packets past those rules.
-SANDBOX_RUN_ARGS = ("--cap-drop", "NET_RAW")
+SANDBOX_RUN_ARGS = ("--cap-drop", "NET_RAW", "--env", f"OH_CONVERSATIONS_PATH={SANDBOX_CONVERSATIONS_DIR}")
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 # Host names and IPv4 addresses only; a leading "-" would read as an option.
 _ENDPOINT_HOST_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")

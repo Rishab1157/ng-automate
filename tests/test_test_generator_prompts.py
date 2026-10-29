@@ -90,10 +90,10 @@ ERRORS = (
 )
 
 
-def _first(command: TestCommandModel = COMMAND, instructions: Sequence[str] = ()) -> str:
+def _first(command: TestCommandModel = COMMAND, instructions: Sequence[str] = (), broken_before: bool = False) -> str:
     """The first message for the Playwright project: TD-001 now, one more case later."""
     return build_generate_prompt(
-        [LOGIN], PLAYWRIGHT_TS, FINDINGS, command, 2, BRIEFING, instructions
+        [LOGIN], PLAYWRIGHT_TS, FINDINGS, command, 2, BRIEFING, instructions, broken_before=broken_before
     )
 
 
@@ -114,6 +114,23 @@ def test_without_a_quick_check_the_first_message_says_so_instead() -> None:
 
     assert NO_CHECK in head and NO_CHECK in rules
     assert "`None`" not in rules and ": None" not in head
+
+
+def test_a_project_that_did_not_build_before_is_not_the_generators_task() -> None:
+    # A real run: the project did not build (jars it needs are not in git). Told to fix every error the check reports,
+    # the generator cut its pom.xml down with sed and downloaded jars, then asked the user for jar URLs in its summary.
+    head, rules = _first(broken_before=True).split(RULES, 1)
+    rules = " ".join(rules.split())
+
+    assert f"`{COMMAND.check}` failed before your work" in head
+    assert "NG Automate checks your files after each batch" not in head  # no check runs after a batch
+    assert "that problem is not your task" in rules
+    assert "do not rewrite build files or download libraries to fix it" in rules
+    assert "never remove existing dependencies or configuration" in rules
+    assert "Write the tests with the code that exists (search the project for it)" in rules
+    assert "In your summary, also say what blocks the build" in rules
+    assert "fix every error it reports" not in rules
+    assert "that problem is not your task" not in _first() + _first(NO_CHECK_COMMAND, broken_before=True)
 
 
 # ---------- the user's instructions ----------
@@ -196,8 +213,8 @@ def test_the_rules_are_the_same_for_every_stack_one_fixed_folder_and_the_rest_le
 def test_done_means_the_projects_own_test_command_finds_and_runs_the_new_tests_with_or_without_a_check() -> None:
     # A real run: the build check passed, but the feature files sat where the build never copies them and there was no
     # runner, so not one scenario ran. Building or loading the new tests is not enough.
-    for command in (COMMAND, NO_CHECK_COMMAND):
-        rules = _first(command).split(RULES, 1)[1]
+    for command, broken_before in ((COMMAND, False), (NO_CHECK_COMMAND, False), (COMMAND, True)):
+        rules = _first(command, broken_before=broken_before).split(RULES, 1)[1]
         assert "the project's own test command would find and run your new tests" in rules
         assert "building or loading them is not enough" in rules
         assert "without running the tests" in rules and "Do not run the whole suite" in rules
@@ -225,10 +242,11 @@ def test_a_playwright_projects_messages_carry_nothing_from_other_stacks() -> Non
     assert COMMAND.check
     messages = {
         "first": _first(instructions=["reuse the login fixture"]),
+        "first, not building": _first(instructions=["reuse the login fixture"], broken_before=True),
         "next batch": build_next_batch_prompt([LOGOUT], 2, 2, ["reuse the login fixture"], STATE),
         "fix": build_fix_prompt(ERRORS, COMMAND.check, STATE),
     }
 
     found = {name: [detail for detail in OTHER_STACKS if detail in text] for name, text in messages.items()}
 
-    assert found == {"first": [], "next batch": [], "fix": []}
+    assert found == {"first": [], "first, not building": [], "next batch": [], "fix": []}

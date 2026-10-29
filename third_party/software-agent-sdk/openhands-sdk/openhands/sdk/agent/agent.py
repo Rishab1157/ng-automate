@@ -354,12 +354,14 @@ class _ActionBatch:
         conversation: LocalConversation,
         on_event: ConversationCallbackType,
         repeated_failures: RepeatedFailures | None = None,
+        tools: dict[str, ToolDefinition] | None = None,
     ) -> None:
         """Emit all events in original action order.
 
         NG Automate: every executed call's results pass ``repeated_failures``, which
         adds a note to the error of a call that failed the same way several times in
-        a row (agent/repeated_failures.py).
+        a row, or of a tool (from ``tools``) that keeps failing on one file
+        (agent/repeated_failures.py).
         """
         for ae in self.action_events:
             reason = self.blocked_reasons.get(ae.id)
@@ -383,7 +385,8 @@ class _ActionBatch:
             else:
                 events = self.results_by_id[ae.id]
                 if repeated_failures is not None:
-                    events = repeated_failures.add_note(conversation.id, ae, events)
+                    tool = (tools or {}).get(ae.tool_name)
+                    events = repeated_failures.add_note(conversation, ae, events, tool)
                 for event in events:
                     on_event(event)
 
@@ -653,7 +656,7 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
             cancel_token=conversation.cancel_token,
             span_owner=conversation,
         )
-        batch.emit(conversation, on_event, self._repeated_failures)
+        batch.emit(conversation, on_event, self._repeated_failures, self.tools_map)
         batch.finalize(
             on_event=on_event,
             check_iterative_refinement=lambda ae: (
@@ -688,7 +691,7 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
             cancel_token=conversation.cancel_token,
             span_owner=conversation,
         )
-        batch.emit(conversation, on_event, self._repeated_failures)
+        batch.emit(conversation, on_event, self._repeated_failures, self.tools_map)
         batch.finalize(
             on_event=on_event,
             check_iterative_refinement=lambda ae: (

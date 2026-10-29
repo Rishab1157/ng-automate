@@ -238,7 +238,7 @@ def test_open_readonly_mounts_the_project_read_only(
         "detach_logs": False,
         "health_check_timeout": 30,
         "network": None,
-        "extra_run_args": ["--cap-drop", "NET_RAW"],
+        "extra_run_args": ["--cap-drop", "NET_RAW", "--env", "OH_CONVERSATIONS_PATH=/tmp/ngauto-conversations"],
     }
     assert len(session_key) >= 40
     assert SANDBOX_PROJECT_DIR == "/workspace/project"
@@ -831,12 +831,33 @@ def test_test_sandbox_publishes_the_live_view_port_and_gets_shared_memory(
 
     writable, readonly = factory.calls
     assert writable["extra_ports"] is True
-    assert writable["extra_run_args"] == ["--cap-drop", "NET_RAW", "--shm-size=1g"]
+    conversations = ["--env", "OH_CONVERSATIONS_PATH=/tmp/ngauto-conversations"]
+    assert writable["extra_run_args"] == ["--cap-drop", "NET_RAW", *conversations, "--shm-size=1g"]
     assert writable["volumes"][0].endswith(":/workspace/project:rw")
     # Build caches are per organization.
     assert any(volume.startswith(f"ngauto-maven-{ORG_ID}:") for volume in writable["volumes"])
     assert "extra_ports" not in readonly
-    assert readonly["extra_run_args"] == ["--cap-drop", "NET_RAW"]
+    assert readonly["extra_run_args"] == ["--cap-drop", "NET_RAW", *conversations]
+
+
+def test_the_agent_server_keeps_its_conversations_outside_the_project(
+    service: SandboxService, factory: FakeWorkspaceFactory, tmp_path: Path
+) -> None:
+    # A real run: the agent server, working in the project, left workspace/conversations/<id>/.owner_lease.lock in it,
+    # where a download or a push would take it along.
+    project_dir = _project_dir(tmp_path)
+
+    with service.open_writable(project_dir, ORG_ID):
+        pass
+    with service.open_readonly(project_dir):
+        pass
+
+    for call in factory.calls:
+        args = call["extra_run_args"]
+        setting = args[args.index("--env") + 1]
+        name, path = setting.split("=", 1)
+        assert name == "OH_CONVERSATIONS_PATH"
+        assert path.startswith("/") and not path.startswith(SANDBOX_PROJECT_DIR)
 
 
 def test_live_view_token_goes_to_the_container_on_stdin(service: SandboxService, docker: FakeDocker) -> None:

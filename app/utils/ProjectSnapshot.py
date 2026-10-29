@@ -1,8 +1,9 @@
 """A copy of a project's text files, to see exactly what an agent changed.
 
 Taken on the host copy of the project before an agent edits it. Build outputs, dependency folders and binary or
-very large files are left out: agents rebuild those, and they are not something to review. Nothing is ever put back
-from a snapshot: an agent's change is never rolled back (the user's rule).
+very large files are left out: agents rebuild those, and they are not something to review line by line (only the paths
+of binary and very large files are kept, to see which ones an agent added). Nothing is ever put back from a snapshot:
+an agent's change is never rolled back (the user's rule).
 """
 
 import difflib
@@ -33,15 +34,23 @@ def is_in_flight_write(name: str) -> bool:
 class ProjectSnapshot:
     root: Path
     files: dict[str, str]  # repo-relative posix path -> text
+    # The files left out of `files` (binary, or larger than MAX_FILE_BYTES): their paths only.
+    other_files: frozenset[str] = frozenset()
 
     @classmethod
     def capture(cls, project_dir: Path) -> "ProjectSnapshot":
         root = project_dir.resolve()
-        return cls(root=root, files=_read_text_files(root))
+        files, other_files = _read_files(root)
+        return cls(root=root, files=files, other_files=frozenset(other_files))
 
     def changes(self) -> list[FileChangeModel]:
         """What changed since the snapshot, sorted by path."""
         return _compare(self.files, _read_text_files(self.root))
+
+    def added_other_files(self) -> list[str]:
+        """Binary or very large files that are new since the snapshot (a downloaded jar, an archive), sorted: changes()
+        leaves them out, so without this an agent could add one unseen."""
+        return sorted(set(_read_files(self.root)[1]) - self.other_files - self.files.keys())
 
     def content(self, path: str) -> str | None:
         return self.files.get(path)
@@ -72,29 +81,39 @@ def _compare(before_files: dict[str, str], after_files: dict[str, str]) -> list[
 
 
 def _read_text_files(root: Path) -> dict[str, str]:
+    return _read_files(root)[0]
+
+
+def _read_files(root: Path) -> tuple[dict[str, str], list[str]]:
+    """The text files (path -> text), and the paths of the binary or very large ones."""
     files: dict[str, str] = {}
+    other_files: list[str] = []
     for current, dirs, names in os.walk(root):
         dirs[:] = [d for d in dirs if d not in SNAPSHOT_SKIPPED_DIRS and not (Path(current) / d).is_symlink()]
         for name in names:
             path = Path(current) / name
             if path.is_symlink() or is_in_flight_write(name):
                 continue
+            relative = path.relative_to(root).as_posix()
             try:
                 if path.stat().st_size > MAX_FILE_BYTES:
+                    other_files.append(relative)
                     continue
                 data = path.read_bytes()
             except OSError:
                 continue
             if b"\0" in data:
-                continue  # binary
+                other_files.append(relative)  # binary
+                continue
             try:
                 text = data.decode("utf-8")
             except UnicodeDecodeError:
+                other_files.append(relative)
                 continue
-            files[path.relative_to(root).as_posix()] = text
+            files[relative] = text
             if len(files) >= MAX_FILES:
-                return files
-    return files
+                return files, other_files
+    return files, other_files
 
 
 def _diff(path: str, before: str, after: str) -> str:

@@ -161,13 +161,14 @@ class TestGeneratorAgent:
         given = [instructions] if instructions else []
         # The last check's result, for the state the next messages show: (passed, errors), or None before any check.
         last_check: list[tuple[bool, str | None]] = []
+        checked = False  # whether the check runs after each batch (only on a project that built before)
 
         def state(cases_done: int) -> str:
             """Where the work stands, from the project's files (the condenser may have dropped the agent's memory)."""
             passed, errors = last_check[-1] if last_check else (None, None)
             current = collect_state(
                 snapshot.root, snapshot.changes(), [case.id for case in cases], [case.id for case in cases[:cases_done]],
-                command.check, passed, errors,
+                command.check if checked else None, passed, errors,
             )
             if current.duplicates:
                 forwarder.notify(AgentEvent(
@@ -179,8 +180,10 @@ class TestGeneratorAgent:
             return describe_state(current)
 
         try:
-            # Only a project that builds before anything is added can show whether the generated tests build.
-            checked = self.fix_rounds > 0 and _builds_before(workspace, command, forwarder)
+            # Only a project that builds before anything is added can show whether the generated tests build. One that
+            # does not is no task of the generator's: its first message says so.
+            built_before = _builds_before(workspace, command, forwarder) if self.fix_rounds > 0 else None
+            checked = built_before is True
             for batch in batches:
                 if control is not None and control.is_stopped:
                     break
@@ -193,7 +196,8 @@ class TestGeneratorAgent:
                     ))
                 prompt = (
                     build_generate_prompt(
-                        batch, fact_sheet, findings, command, len(cases), briefing, given
+                        batch, fact_sheet, findings, command, len(cases), briefing, given,
+                        broken_before=built_before is False,
                     )
                     if done == 0
                     else build_next_batch_prompt(
@@ -336,10 +340,10 @@ class TestGeneratorAgent:
         )
 
 
-def _builds_before(workspace: BaseWorkspace, command: TestCommandModel, forwarder: EventForwarder) -> bool:
-    """Install what the project declares, then check that it builds as it is (no check for this stack: False)."""
+def _builds_before(workspace: BaseWorkspace, command: TestCommandModel, forwarder: EventForwarder) -> bool | None:
+    """Install what the project declares, then check whether it builds as it is (no check for this stack: None)."""
     if not command.check:
-        return False
+        return None
     if command.setup:
         _execute(workspace, command.setup)
     if _build_errors(workspace, command, forwarder) is None:
