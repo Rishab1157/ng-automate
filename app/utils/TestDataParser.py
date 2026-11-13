@@ -1,10 +1,13 @@
-"""Read an uploaded test-data source: our own JSON/CSV format at once, anything else as a free-form source.
+"""Read an uploaded test-data file. Nothing in its content is required.
 
-Our format is a list of test cases with steps (JSON, or CSV rows with our columns). JSON in any other shape, CSV with
-other columns and plain text (.txt, .md) are free-form: an LLM turns them into test cases later (TestCaseExtractor). Locators come from the source. A step that
-needs an element and names none (no locator, no element in words) is marked `needs_locator` and reported; it is never
-guessed. Errors name the case or row so users can fix their file. A case without an id gets the first TD-001, TD-002,
-... that no other case of the project has: tests are named after case ids.
+The user's files are their knowledge base, written however they write them: stories, manual test cases, Gherkin, a
+sheet of locators, notes, in any language. A file is refused only when it is empty or its syntax is broken (JSON that
+does not parse, text that is not UTF-8, a file type no person reads as text). Everything else is accepted as it is.
+JSON in our own shape (a list of cases with steps) or TXGENIE's shape is read at once, without a model; any other file
+is a free-form source that an LLM reads later (TestCaseExtractor), and a file in our shape with something odd in it
+is read that way too, never refused. A step that needs an element and names none is marked `needs_locator` and
+reported (never guessed: the generator finds or assumes the locator). A case without an id gets the first TD-001,
+TD-002, ... that no other case of the project has: tests are named after case ids.
 """
 
 import csv
@@ -31,12 +34,14 @@ TARGETED_ACTIONS = frozenset({
     "upload",
 })
 NAVIGATION_ACTIONS = frozenset({"open", "navigate"})
-CSV_COLUMNS = ("case_id", "title", "action", "target", "value", "expected", "tags", "description")
-# A CSV with these columns is our format (parsed strictly); any other CSV is a free-form source.
-REQUIRED_CSV_COLUMNS = ("case_id", "title", "action")
+# A step whose action the file does not name: the generator reads the step's words.
+OTHER_ACTION = "other"
 
 STRUCTURED_EXTENSIONS = ("json", "csv")
-TEXT_EXTENSIONS = ("txt", "md", "text", "feature")
+# Any plain-text file a person reads without a tool: stories, manual cases, Gherkin, locator sheets, page sources, notes.
+TEXT_EXTENSIONS = (
+    "txt", "text", "md", "feature", "gherkin", "tsv", "yaml", "yml", "xml", "html", "htm", "properties", "ini",
+)
 ACCEPTED_EXTENSIONS = (*STRUCTURED_EXTENSIONS, *TEXT_EXTENSIONS)
 
 UNSUPPORTED_FORMAT = (
@@ -53,25 +58,21 @@ EMPTY_CSV = "The test data CSV has no rows below its header"
 NOT_UTF8 = "Test data must be UTF-8 text"
 INVALID_JSON = "Test data is not valid JSON: {reason}"
 INVALID_CSV = "Test data is not valid CSV: {reason}"
-JSON_SHAPE = 'Test data JSON must be a list of test cases or {"test_cases": [...]}'
-CSV_MISSING_COLUMNS = "Test data CSV is missing the column(s): {columns}"
-CASE_NOT_OBJECT = "Test case {index} must be an object"
-CASE_FIELD_REQUIRED = "Test case {case}: '{field}' is required"
-STEP_ACTION_REQUIRED = "Test case {case} step {step}: 'action' is required"
 TOO_MANY_CASES = f"Test data has more than {MAX_CASES} test cases"
 TOO_MANY_STEPS = f"Test case {{case}} has more than {MAX_STEPS_PER_CASE} steps"
-DUPLICATE_CASE = "Test case id '{case}' is used more than once"
 NO_CASES = "Test data contains no test cases"
 NEEDS_LOCATOR = "case {case} step {step}: {action} needs a locator"
 NEEDS_URL = "case {case} step {step}: {action} needs a URL"
-CSV_OTHER_TITLE = (
-    "case {case}: the row titled '{title}' was read as a step of '{first}' (rows with the same case_id are one case)"
-)
+
+
+class NoTestCases(ValueError):
+    """Every part of a free-form source was read and none holds a test case (a sheet of locators, a note with
+    accounts): not a failure, the file is context for the test generator."""
 
 
 @dataclass(frozen=True)
 class FreeFormSource:
-    """A source an LLM must read first: JSON in another shape, CSV with other columns, or plain text."""
+    """A source an LLM must read first: anything that is not JSON in our own or TXGENIE's shape."""
 
     source_format: TestDataFormat
     text: str
@@ -80,8 +81,9 @@ class FreeFormSource:
 def read_test_data(
     content: bytes, filename: str, taken_ids: Collection[str] = ()
 ) -> TestDataSetModel | FreeFormSource:
-    """Our own format -> its test cases; anything else we accept -> a free-form source. Raises ValidationError.
-    `taken_ids`: the case ids the project's other test data has, which the ids of cases without one must not repeat."""
+    """A test-data file as the user wrote it: refused only when empty or its syntax is broken. JSON in our own or
+    TXGENIE's shape -> its cases at once; anything else -> a free-form source the model reads. `taken_ids`: the case
+    ids the project's other test data has, which the ids given to cases without one must not repeat."""
     extension = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     if extension not in ACCEPTED_EXTENSIONS:
         raise ValidationError(UNSUPPORTED_FORMAT)
@@ -92,35 +94,32 @@ def read_test_data(
         raise ValidationError(EMPTY_SOURCE)
 
     if extension == "csv":
-        return _read_csv(text, taken_ids)
+        rows = _csv_rows(text)  # the syntax
+        if not any(cell.strip() for row in rows[1:] for cell in row):
+            raise ValidationError(EMPTY_CSV)
+        return _free_form(text, TestDataFormat.CSV)
     if extension == "json":
-        data = _load_json(text)
-        txgenie = _txgenie_cases(data, taken_ids)
-        if txgenie is not None:
-            return txgenie
-        raw_cases = _own_format_cases(data)
-        if raw_cases is not None:
-            return _build(raw_cases, TestDataFormat.JSON, taken_ids)
+        data = _load_json(text)  # the syntax
+        if data in ([], {}):
+            raise ValidationError(EMPTY_SOURCE)
+        try:
+            txgenie = _txgenie_cases(data, taken_ids)
+            if txgenie is not None:
+                return txgenie
+            raw_cases = _own_format_cases(data)
+            if raw_cases is not None:
+                return _build(raw_cases, TestDataFormat.JSON, taken_ids)
+        except ValidationError:
+            pass  # our shape, but too much of it: the model reads it in parts like any other source
         return _free_form(json.dumps(data, indent=2, ensure_ascii=False), TestDataFormat.JSON)
     return _free_form(text, TestDataFormat.TEXT)
-
-
-def parse_test_data(content: bytes, filename: str) -> TestDataSetModel:
-    """Our own JSON/CSV format only (free-form sources are a ValidationError here)."""
-    result = read_test_data(content, filename)
-    if isinstance(result, FreeFormSource):
-        if result.source_format == TestDataFormat.CSV:
-            header, _ = _csv_header_and_rows(_csv_rows(result.text))
-            missing = [column for column in REQUIRED_CSV_COLUMNS if column not in header]
-            raise ValidationError(CSV_MISSING_COLUMNS.format(columns=", ".join(missing)))
-        raise ValidationError(JSON_SHAPE if result.source_format == TestDataFormat.JSON else UNSUPPORTED_FORMAT)
-    return result
 
 
 def build_test_data_set(
     cases: list[TestCaseSpecModel], source_format: TestDataFormat, taken_ids: Collection[str] = ()
 ) -> TestDataSetModel:
-    """Check edited or extracted cases (ids, limits) and recompute which steps still need an element."""
+    """Edited or extracted cases as a data set: ids made unique, limits checked, and which steps still need an
+    element worked out again."""
     raw = [case.model_dump() for case in cases]
     return _build(raw, source_format, taken_ids)
 
@@ -140,10 +139,8 @@ def _build(raw_cases: list[Any], source_format: TestDataFormat, taken_ids: Colle
     cases: list[TestCaseSpecModel] = []
     seen: set[str] = set()
     new_ids = new_case_ids({*taken_ids, *_given_ids(raw_cases)})
-    for index, raw in enumerate(raw_cases, start=1):
-        case = _case(raw, index, warnings, new_ids)
-        if case.id in seen:
-            raise ValidationError(DUPLICATE_CASE.format(case=case.id))
+    for raw in raw_cases:
+        case = _case(raw, warnings, new_ids, seen)
         seen.add(case.id)
         cases.append(case)
     return TestDataSetModel(source_format=source_format, cases=cases, warnings=warnings)
@@ -169,6 +166,13 @@ def _load_json(text: str) -> Any:
         raise ValidationError(INVALID_JSON.format(reason=f"line {error.lineno}, column {error.colno}: {error.msg}")) from None
 
 
+def _csv_rows(text: str) -> list[list[str]]:
+    try:
+        return list(csv.reader(io.StringIO(text)))
+    except csv.Error as error:
+        raise ValidationError(INVALID_CSV.format(reason=error)) from None
+
+
 def _txgenie_cases(data: Any, taken_ids: Collection[str] = ()) -> TestDataSetModel | None:
     """TXGENIE's generated test cases (steps with action / test_data / expected_result), else None.
 
@@ -190,9 +194,7 @@ def _txgenie_cases(data: Any, taken_ids: Collection[str] = ()) -> TestDataSetMod
     seen: set[str] = set()
     new_ids = new_case_ids({*taken_ids, *_given_ids(raw_cases)})
     for index, raw in enumerate(raw_cases, start=1):
-        case = _txgenie_case(raw, index, new_ids)
-        if case.id in seen:
-            raise ValidationError(DUPLICATE_CASE.format(case=case.id))
+        case = _txgenie_case(raw, index, new_ids, seen)
         seen.add(case.id)
         cases.append(case)
     return TestDataSetModel(source_format=TestDataFormat.JSON, cases=cases, warnings=[])
@@ -208,14 +210,11 @@ def _txgenie_locator(step: dict[str, Any]) -> str | None:
     return _text(step.get("locator")) or (match["locator"].strip() if match else None)
 
 
-def _txgenie_case(raw: dict[str, Any], index: int, new_ids: Iterator[str]) -> TestCaseSpecModel:
-    label = _case_label(raw, index)
+def _txgenie_case(raw: dict[str, Any], index: int, new_ids: Iterator[str], seen: Collection[str]) -> TestCaseSpecModel:
+    case_id = _unique_id(_text(raw.get("id")) or next(new_ids), seen)
     raw_steps = [step for step in raw.get("steps") or [] if isinstance(step, dict) and _text(step.get("action"))]
-    if not raw_steps:
-        raise ValidationError(CASE_FIELD_REQUIRED.format(case=label, field="steps"))
     if len(raw_steps) > MAX_STEPS_PER_CASE:
-        raise ValidationError(TOO_MANY_STEPS.format(case=label))
-    case_id = _text(raw.get("id")) or next(new_ids)
+        raise ValidationError(TOO_MANY_STEPS.format(case=case_id))
     raw_steps.sort(key=lambda step: step.get("step_number") if isinstance(step.get("step_number"), int) else 0)
     steps = [
         TestStepModel(
@@ -257,72 +256,22 @@ def _free_text(value: Any) -> str:
 
 
 def _own_format_cases(data: Any) -> list[Any] | None:
-    """The cases when the JSON is meant to be our format (cases with steps), else None (a free-form source).
-
-    JSON that is clearly our format is parsed strictly, so its mistakes are reported instead of guessed around.
-    """
-    if isinstance(data, dict) and isinstance(data.get("test_cases"), list):
-        return data["test_cases"]
-    if isinstance(data, list) and all(isinstance(item, dict) and "steps" in item for item in data):
-        return data  # an empty list too: "no test cases" says more than asking an LLM to read nothing
-    return None
+    """The cases when the JSON is whole in our own shape: a list (or {"test_cases": [...]}) of cases that each have a
+    title and a list of steps with an action. Else None: the model reads it like any other file (it may be our shape
+    with a piece missing; nothing is required, this only decides who reads it)."""
+    cases = data.get("test_cases") if isinstance(data, dict) else data
+    if not isinstance(cases, list) or not all(_in_our_shape(case) for case in cases):
+        return None
+    return cases
 
 
-def _read_csv(text: str, taken_ids: Collection[str] = ()) -> TestDataSetModel | FreeFormSource:
-    """Our CSV format (its header has our columns) -> its test cases, strictly; any other CSV with rows -> a free-form
-    source."""
-    header, rows = _csv_header_and_rows(_csv_rows(text))
-    if all(column in header for column in REQUIRED_CSV_COLUMNS):
-        warnings: list[str] = []
-        data_set = _build(_csv_cases(header, rows, warnings), TestDataFormat.CSV, taken_ids)
-        return data_set.model_copy(update={"warnings": [*warnings, *data_set.warnings]})
-    if not any(cell.strip() for row in rows for cell in row):
-        raise ValidationError(EMPTY_CSV)
-    return _free_form(text, TestDataFormat.CSV)
-
-
-def _csv_rows(text: str) -> list[list[str]]:
-    try:
-        return list(csv.reader(io.StringIO(text)))
-    except csv.Error as error:
-        raise ValidationError(INVALID_CSV.format(reason=error)) from None
-
-
-def _csv_header_and_rows(rows: list[list[str]]) -> tuple[list[str], list[list[str]]]:
-    """The header (the first row that is not blank, its names in lowercase) and the rows below it."""
-    for index, row in enumerate(rows):
-        if any(cell.strip() for cell in row):
-            return [cell.strip().lower() for cell in row], rows[index + 1:]
-    return [], []
-
-
-def _csv_cases(header: list[str], rows: list[list[str]], warnings: list[str]) -> list[dict[str, Any]]:
-    """Rows with the same case_id are one case. A row with another title (not a blank one) stays a step of that case,
-    with a warning: it is most likely a copied id, and splitting it off would need an id the user never gave."""
-    cases: dict[str, dict[str, Any]] = {}
-    reported: set[tuple[str, str]] = set()  # (case id, other title): each is reported once
-    for row in rows:
-        # Cells past the header are ignored; missing cells are empty. A repeated column name: its last cell wins.
-        values = {name: (row[index] if index < len(row) else "").strip() for index, name in enumerate(header)}
-        if not any(values.values()):
-            continue
-        case_id = values.get("case_id", "")
-        case = cases.setdefault(case_id, {
-            "id": case_id,
-            "title": values.get("title", ""),
-            "description": values.get("description") or None,
-            "tags": [tag.strip() for tag in re.split(r"[;,]", values.get("tags", "")) if tag.strip()],
-            "steps": [],
-        })
-        title = values.get("title", "")
-        if title and case["title"] and title.casefold() != case["title"].casefold():
-            if (case_id, title.casefold()) not in reported:
-                reported.add((case_id, title.casefold()))
-                warnings.append(CSV_OTHER_TITLE.format(case=case_id, title=title, first=case["title"]))
-        case["steps"].append({key: values.get(key) or None for key in ("action", "target", "value", "expected")})
-        if len(cases) > MAX_CASES:
-            raise ValidationError(TOO_MANY_CASES)
-    return list(cases.values())
+def _in_our_shape(case: Any) -> bool:
+    return (
+        isinstance(case, dict)
+        and bool(_text(case.get("title")))
+        and isinstance(case.get("steps"), list)
+        and all(isinstance(step, dict) and bool(_text(step.get("action"))) for step in case["steps"])
+    )
 
 
 def _given_ids(raw_cases: list[Any]) -> set[str]:
@@ -330,32 +279,40 @@ def _given_ids(raw_cases: list[Any]) -> set[str]:
     return {case_id for raw in raw_cases if isinstance(raw, dict) and (case_id := _text(raw.get("id")))}
 
 
-def _case_label(raw: dict[str, Any], index: int) -> str:
-    """How an error names a case: its id, else its place in the file (an error stores nothing, so it has no id yet)."""
-    return _text(raw.get("id")) or f"TC-{index}"
+def _unique_id(case_id: str, seen: Collection[str]) -> str:
+    """The id, with a suffix when another case of the set already has it (TD-L02, TD-L02-2): tests are named after
+    ids, so no two cases share one."""
+    unique, suffix = case_id, 2
+    while unique in seen:
+        unique, suffix = f"{case_id}-{suffix}", suffix + 1
+    return unique
 
 
-def _case(raw: Any, index: int, warnings: list[str], new_ids: Iterator[str]) -> TestCaseSpecModel:
-    if not isinstance(raw, dict):
-        raise ValidationError(CASE_NOT_OBJECT.format(index=index))
-    label = _case_label(raw, index)
-    title = _text(raw.get("title"))
-    if not title:
-        raise ValidationError(CASE_FIELD_REQUIRED.format(case=label, field="title"))
+def _case(raw: Any, warnings: list[str], new_ids: Iterator[str], seen: Collection[str]) -> TestCaseSpecModel:
+    """A case as the file gives it. Nothing in it is required: a missing title comes from its first step or its id,
+    steps given as one sentence are one step, and a step without an action is one the generator reads in words."""
+    raw = raw if isinstance(raw, dict) else {"title": _text(raw)}
+    case_id = _unique_id(_text(raw.get("id")) or next(new_ids), seen)
     raw_steps = raw.get("steps")
-    if not isinstance(raw_steps, list) or not raw_steps:
-        raise ValidationError(CASE_FIELD_REQUIRED.format(case=label, field="steps"))
+    if raw_steps is None:
+        raw_steps = []
+    elif not isinstance(raw_steps, list):
+        raw_steps = [raw_steps]
     if len(raw_steps) > MAX_STEPS_PER_CASE:
-        raise ValidationError(TOO_MANY_STEPS.format(case=label))
-
-    case_id = _text(raw.get("id")) or next(new_ids)
-    steps = [_step(step, case_id, number, warnings, label) for number, step in enumerate(raw_steps, start=1)]
+        raise ValidationError(TOO_MANY_STEPS.format(case=case_id))
+    steps = [_step(step, case_id, number, warnings) for number, step in enumerate(raw_steps, start=1)]
+    title = _text(raw.get("title") or raw.get("name")) or next(
+        (step.text or step.action for step in steps if step.text or step.action), case_id
+    )
     test_data = raw.get("test_data") if isinstance(raw.get("test_data"), dict) else {}
+    preconditions = raw.get("preconditions")
+    if isinstance(preconditions, str):
+        preconditions = [preconditions]
     return TestCaseSpecModel(
         id=case_id,
         title=title,
         description=_text(raw.get("description")) or None,
-        preconditions=[_text(item) for item in raw.get("preconditions") or [] if _text(item)],
+        preconditions=[_text(item) for item in preconditions or [] if _text(item)],
         steps=steps,
         test_data={str(key): _text(value) for key, value in test_data.items()},
         tags=[_text(tag) for tag in raw.get("tags") or [] if _text(tag)],
@@ -363,12 +320,10 @@ def _case(raw: Any, index: int, warnings: list[str], new_ids: Iterator[str]) -> 
     )
 
 
-def _step(raw: Any, case_id: str, number: int, warnings: list[str], label: str) -> TestStepModel:
-    """A warning names the case by the id it gets (`case_id`), an error the way its file does (`label`)."""
-    raw = raw if isinstance(raw, dict) else {}
-    action = re.sub(r"[\s-]+", "_", _text(raw.get("action")).lower())
-    if not action:
-        raise ValidationError(STEP_ACTION_REQUIRED.format(case=label, step=number))
+def _step(raw: Any, case_id: str, number: int, warnings: list[str]) -> TestStepModel:
+    """A step as the file gives it: a dict with our fields, or just its words."""
+    raw = raw if isinstance(raw, dict) else {"text": _text(raw)}
+    action = re.sub(r"[\s-]+", "_", _text(raw.get("action")).lower()) or OTHER_ACTION
     target = _text(raw.get("target")) or None
     target_hint = _text(raw.get("target_hint") or raw.get("element")) or None
     alternates = _alternate_locators(raw)

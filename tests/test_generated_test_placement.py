@@ -1,26 +1,9 @@
-"""Which cases can become tests, and the locators the generator had to assume."""
+"""The locators the generator had to assume, and the new test files a plain test run would skip."""
 
 from pathlib import Path
 
-from app.agents.TestGeneratorAgent.GeneratedTestPlacement import (
-    runnable_cases,
-    unverified_locators,
-)
+from app.agents.TestGeneratorAgent.GeneratedTestPlacement import unverified_locators
 from app.models.healerModel import FileChangeModel
-from app.models.testDataModel import TestCaseSpecModel, TestStepModel
-
-
-def test_a_step_without_locator_keeps_its_case_only_a_case_without_steps_is_left_out() -> None:
-    good = TestCaseSpecModel(id="A", title="ok", steps=[TestStepModel(action="click", target="id=go")])
-    no_locator = TestCaseSpecModel(
-        id="B", title="missing", steps=[TestStepModel(action="open", target="https://x"), TestStepModel(action="click", needs_locator=True)]
-    )
-    empty = TestCaseSpecModel(id="C", title="nothing to do", steps=[])
-
-    runnable, skipped = runnable_cases([good, no_locator, empty])
-
-    assert [case.id for case in runnable] == ["A", "B"]  # B's locator is assumed and marked by the generator
-    assert skipped == [("C", "the case has no steps")]
 
 
 def test_assumed_locators_are_found_with_their_code_line(tmp_path: Path) -> None:

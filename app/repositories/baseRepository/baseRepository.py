@@ -58,6 +58,11 @@ class BaseRepository:
         result = await self.collection.update_many(filter, update)
         return result.modified_count
 
+    async def delete_one(self, filter: dict[str, Any]) -> int:
+        """How many documents were deleted (0 or 1)."""
+        result = await self.collection.delete_one(filter)
+        return result.deleted_count
+
     async def find_one_and_update(
         self,
         filter: dict[str, Any],

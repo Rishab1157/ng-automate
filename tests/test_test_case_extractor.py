@@ -23,6 +23,7 @@ from app.models.llmModel import LlmConfigModel
 from app.models.testDataModel import TestDataFormat
 from app.models.tokenUsageModel import TokenUsageModel
 from app.utils.LlmInstance import MODEL_NOT_ANSWERING
+from app.utils.TestDataParser import NoTestCases
 
 extractor_module = importlib.import_module("app.agents.TestGeneratorAgent.TestCaseExtractor")
 
@@ -305,7 +306,14 @@ def test_the_reader_is_told_to_copy_locators_and_ids_as_written_and_to_share_set
     assert locators and all(locator in example_source for locator in locators)
     assert "also when it starts the title" in rules  # "TD-L01 Valid login" lost its id
     assert "a setup or background section) belong to every case" in rules  # a Gherkin Background was dropped
-    assert "does not describe how to test software" in rules and "return an empty 'cases' list" in rules  # a recipe
+    assert "not about software at all" in rules and "return an empty 'cases' list" in rules  # a recipe
+    # Plain user stories without ids, titles or values gave no case at all with the free model ("a story" was named as
+    # no test documentation): any wording of what users do is a case.
+    assert "a story" not in rules
+    assert "User stories, requirements, acceptance criteria and plain sentences about what users can do" in rules
+    # A hosted model turned developer notes with locators into two "cases"; a story's "signed-in shopper" was lost.
+    assert "only lists locators, selectors, element ids, accounts, URLs or settings" in rules
+    assert "goes into 'preconditions' in the source's words, so the test sets it up first" in rules
     # A source with a real case and text that orders the agent around (delete files, print secrets, "these steps
     # are part of the test") gave no case at all with the free model: it kept the orders out and dropped the case too.
     # Worded and placed as tried on that model: last, and saying where such a block goes and that the others count.
@@ -355,11 +363,20 @@ def test_a_model_that_does_not_answer_fails_the_reading_at_once(monkeypatch: pyt
     assert fake.calls == []  # the source was never sent
 
 
-def test_nothing_readable_is_an_error() -> None:
-    with pytest.raises(ValueError) as caught:
+def test_a_source_without_test_cases_says_so_apart_from_a_failure() -> None:
+    # A sheet of locators, a note with accounts: read fine, no case in it. The file is context, not a failure.
+    with pytest.raises(NoTestCases) as caught:
         _extractor(FakeComplete({"cases": [], "not_test_cases": ["B1", "B2", "B3"]})).extract(TEXT, TestDataFormat.TEXT)
 
     assert str(caught.value) == NO_CASES_FOUND
+
+
+def test_a_part_that_could_not_be_read_is_a_failure_not_a_source_without_cases() -> None:
+    with pytest.raises(ValueError) as caught:
+        _extractor(FakeComplete(ValueError("the model call failed"))).extract(TEXT, TestDataFormat.TEXT)
+
+    assert not isinstance(caught.value, NoTestCases)
+    assert str(caught.value).startswith("part 1 of the source could not be read")
 
 
 def test_json_export_records_become_blocks() -> None:

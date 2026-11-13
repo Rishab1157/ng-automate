@@ -60,7 +60,10 @@ def test_upload_stores_the_parsed_cases_and_warns_about_missing_locators(
     assert doc["org_id"] == ObjectId(org_id) and doc["case_count"] == 2
 
 
-def test_csv_upload(client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str) -> None:
+def test_any_csv_is_read_by_the_model(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str, processor: FakeProcessor
+) -> None:
+    # Also one in the columns NG Automate once required: no column is required, the model reads what the user wrote.
     csv = (
         "case_id,title,action,target,value,expected,tags,description\n"
         "C1,Search,open,https://shop.example,,,,\n"
@@ -69,8 +72,9 @@ def test_csv_upload(client: TestClient, mongo: MongoClient, auth_headers: AuthHe
 
     response = _upload(client, auth_headers(org_id), seed_project(mongo, org_id), csv, "cases.csv")
 
-    assert response.status_code == 201
-    assert (response.json()["source_format"], response.json()["case_count"]) == ("csv", 1)
+    assert response.status_code == 202
+    assert (response.json()["status"], response.json()["source_format"]) == ("processing", "csv")
+    assert processor.submitted == [response.json()["id"]]
 
 
 def test_invalid_files_are_rejected_and_nothing_is_stored(
@@ -429,3 +433,56 @@ def test_the_upload_description_names_every_accepted_file_type() -> None:
 
     assert all(f".{name}" in operation["summary"] for name in TEXT_EXTENSIONS)
     assert all(f".{name}" in file_field["description"] for name in ACCEPTED_EXTENSIONS)
+
+
+# ---------- delete (a file uploaded by mistake) ----------
+
+def _delete(client: TestClient, headers: dict[str, str], project_id: str, test_data_id: str):
+    return client.delete(f"{BASE}/{project_id}/test-data/{test_data_id}", headers=headers)
+
+
+def test_a_test_data_file_can_be_deleted_record_and_file(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers, project_id = auth_headers(org_id), seed_project(mongo, org_id)
+    kept = _upload(client, headers, project_id, json.dumps(CASES).encode(), "keep.json").json()["id"]
+    mistake = _upload(client, headers, project_id, json.dumps([CASES[0]]).encode(), "mistake.json").json()["id"]
+    stored = settings.DATA_DIR / "projects" / project_id / "test-data" / "mistake.json"
+    assert stored.exists()
+
+    response = _delete(client, headers, project_id, mistake)
+
+    assert response.status_code == 200 and response.json()["message"] == "Test data deleted successfully"
+    assert not stored.exists()
+    assert client.get(f"{BASE}/{project_id}/test-data/{mistake}", headers=headers).status_code == 404
+    assert [item["id"] for item in client.get(f"{BASE}/{project_id}/test-data", headers=headers).json()] == [kept]
+    assert _delete(client, headers, project_id, mistake).status_code == 404  # already gone
+
+
+def test_a_test_data_file_cannot_be_deleted_while_a_run_uses_the_project(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers, project_id = auth_headers(org_id), seed_project(mongo, org_id)
+    test_data_id = _upload(client, headers, project_id, json.dumps(CASES).encode()).json()["id"]
+    mongo[settings.MONGO_DATABASE].runs.insert_one(
+        {"project_id": ObjectId(project_id), "org_id": ObjectId(org_id), "status": "running"}
+    )
+
+    response = _delete(client, headers, project_id, test_data_id)
+
+    assert response.status_code == 409 and response.json()["error"]["code"] == "PROJECT_BUSY"
+    assert (settings.DATA_DIR / "projects" / project_id / "test-data" / "cases.json").exists()
+    assert client.get(f"{BASE}/{project_id}/test-data/{test_data_id}", headers=headers).status_code == 200
+
+
+def test_another_organizations_test_data_cannot_be_deleted(
+    client: TestClient, mongo: MongoClient, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    project_id = seed_project(mongo, org_id)
+    test_data_id = _upload(client, auth_headers(org_id), project_id, json.dumps(CASES).encode()).json()["id"]
+    other_org = str(ObjectId())
+
+    response = _delete(client, auth_headers(other_org), project_id, test_data_id)
+
+    assert response.status_code == 404
+    assert mongo[settings.MONGO_DATABASE].test_data.count_documents({"_id": ObjectId(test_data_id)}) == 1

@@ -42,7 +42,6 @@ from app.models.runModel import (
     TestStopReason,
     TokenUsageStage,
 )
-from app.models.testDataModel import TestDataStatus
 from app.models.testGeneratorModel import GenerationOutcomeModel
 from app.models.testRunModel import TestCommandModel, TestRunResultModel
 from app.models.tokenUsageModel import TokenUsageModel
@@ -87,6 +86,7 @@ BUDGET_SLACK_SECONDS = 1.0
 MAX_DETAIL_CHARS = 300
 MEMORIES_MESSAGE = "The healer got {count} similar earlier {heals} as context ({worked} worked, {failed} did not)"
 NO_GENERATED_FILES = "the generator wrote no test files"
+NOTHING_NEW = "No new tests needed"
 MAX_REPORTED_FILES = 20
 
 FactCollector = Callable[[Path], FactSheetModel]
@@ -215,10 +215,11 @@ class MasterNodes:
         stage = RunStage.GENERATING_TESTS
         run_id, org_id = state["run_id"], state["org_id"]
         await self._start_stage(state, stage)
-        upload = await self.test_data_service.get(state["test_data_id"], state["project_id"], org_id)
-        if upload.status != TestDataStatus.READY or upload.data_set is None:
-            raise ValidationError(ErrorMessages.TEST_DATA_NOT_READY.format(status=upload.status.value))
-        data_set = upload.data_set
+        # The cases of every file of the project that has some (or of the one file the run names): the rest of the
+        # files reach the generator as its knowledge base.
+        data_set = await self.test_data_service.cases_for_generation(
+            state["project_id"], org_id, state.get("test_data_id")
+        )
         profile = await self.profile_service.get_latest(state["project_id"], org_id)
         fact_sheet = FactSheetModel.model_validate(state["fact_sheet"])
         # Also stops a stack the sandbox cannot run (UFT) before the generator spends any time on it.
@@ -235,11 +236,14 @@ class MasterNodes:
             lambda session: self.generator_factory(llm_config).generate(
                 session.workspace, project_dir, data_set, fact_sheet, profile.findings, command, bridge.on_event,
                 control=agent_control(run_id), instructions=state.get("instructions"),
+                test_data_dir=self.sandbox_service.test_data_dir(state["project_id"]),
             ),
         )
         tokens = await self._count_tokens(state, "generate", outcome.token_usage)
         await self.run_service.save_outputs(run_id, generation=outcome)
-        if not outcome.files:
+        # No file is a failure, unless an earlier generation's tests already cover every case (generating again from the
+        # same test data): then there was nothing new to write.
+        if not outcome.files and (outcome.error or outcome.generated_cases or not _covered_cases(outcome)):
             # The generator's error is already a full message ("The test generator stopped: ...").
             raise GenerationError(outcome.error or ErrorMessages.GENERATION_FAILED.format(reason=NO_GENERATED_FILES))
         await self._finish_stage(state, stage, _describe_generation(outcome), **_generation_summary(outcome))
@@ -578,15 +582,24 @@ def _describe_findings(findings: AnalyzerFindingsModel) -> str:
     return " · ".join(parts)
 
 
+def _covered_cases(outcome: GenerationOutcomeModel) -> list[str]:
+    """The cases an earlier generation's test already covers."""
+    return [case.case_id for case in outcome.skipped_cases if case.covered_by]
+
+
 def _describe_generation(outcome: GenerationOutcomeModel) -> str:
     """One timeline line, e.g. "Wrote tests for 3 cases in 2 files · 2 assumed locators to check"."""
+    covered = len(_covered_cases(outcome))
     message = (
         f"Wrote tests for {_count(len(outcome.generated_cases), 'case')} in {_count(len(outcome.files), 'file')}"
+        if outcome.files else NOTHING_NEW
     )
+    if covered:
+        message += f" · {_count(covered, 'case')} already tested by an earlier generation"
     if outcome.unverified_locators:
         message += f" · {_count(len(outcome.unverified_locators), 'assumed locator')} to check"
-    if outcome.skipped_cases:
-        message += f" · {_count(len(outcome.skipped_cases), 'case')} left out"
+    if len(outcome.skipped_cases) > covered:
+        message += f" · {_count(len(outcome.skipped_cases) - covered, 'case')} left out"
     if outcome.violations:
         message += f" · {_count(len({violation.file for violation in outcome.violations}), 'risky change')} to review"
     if outcome.error:

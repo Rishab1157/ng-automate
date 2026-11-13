@@ -1,3 +1,7 @@
+"""Reading an uploaded test-data file: nothing in its content is required. Only an empty file, broken syntax or a
+file type nobody reads as text is refused; JSON whole in our own (or TXGENIE's) shape is read at once, everything else
+is a free-form source the model reads."""
+
 import json
 import re
 from collections.abc import Collection
@@ -10,7 +14,7 @@ from app.utils.TestDataParser import (
     MAX_TEST_DATA_BYTES,
     STRUCTURED_EXTENSIONS,
     TEXT_EXTENSIONS,
-    parse_test_data,
+    FreeFormSource,
     read_test_data,
 )
 
@@ -33,9 +37,95 @@ CASES = [
 ]
 
 
+def _read_at_once(content: bytes, filename: str):
+    """A file in our own shape, read without a model: the tests below check what that reading makes of it."""
+    result = read_test_data(content, filename)
+    assert not isinstance(result, FreeFormSource), "this file was expected to be read at once"
+    return result
+
+
+# ---------- refused: only empty files and broken syntax ----------
+
+@pytest.mark.parametrize(
+    ("content", "filename", "message"),
+    [
+        (b"[]", "x.xlsx", ".json, .csv, .txt, .text, .md, .feature, .gherkin, .tsv, .yaml, .yml, .xml, .html, .htm, "
+                          ".properties or .ini file"),
+        (b"{not json", "x.json", "line 1"),
+        (b"[]", "x.json", "empty"),
+        (b"{}", "x.json", "empty"),
+        (b"", "x.txt", "empty"),
+        (b"  \n\n", "x.md", "empty"),
+        (b"\xff\xfe\x00", "x.json", "UTF-8"),
+        (b"case_id,title,action\n", "x.csv", "no rows below its header"),
+    ],
+)
+def test_only_an_empty_file_or_broken_syntax_is_refused(content: bytes, filename: str, message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        read_test_data(content, filename)
+
+
+def test_the_message_for_another_file_type_names_every_type_that_is_accepted() -> None:
+    with pytest.raises(ValidationError) as caught:
+        read_test_data(b"[]", "cases.xlsx")
+
+    assert re.findall(r"\.(\w+)", caught.value.message) == [*STRUCTURED_EXTENSIONS, *TEXT_EXTENSIONS]
+
+
+def test_a_file_larger_than_the_limit_is_refused() -> None:
+    with pytest.raises(ValidationError, match="larger than"):
+        read_test_data(b"x" * (MAX_TEST_DATA_BYTES + 1), "x.json")
+
+
+# ---------- accepted as written: the model reads whatever the user wrote ----------
+
+@pytest.mark.parametrize(("content", "filename"), [
+    ("A shopper signs in and sees the products.", "story.txt"),
+    ("Feature: Login\n  Scenario: ok\n    Given the shop\n", "login.feature"),
+    ("element,locator\nLogin button,#login-button\n", "locators.csv"),
+    ("case_id,title,action,target\nC1,Login,open,https://x.test\n", "our-old-columns.csv"),
+    ("case_id,title,action\nC1,,click\n", "x.csv"),
+    (json.dumps({"cases": [{"name": "Login"}]}), "x.json"),
+    (json.dumps([{"steps": [{"action": "open"}]}]), "no-title.json"),
+    (json.dumps([{"title": "t", "steps": "click the login button"}]), "steps-as-a-sentence.json"),
+    (json.dumps([{"title": "t", "steps": [{"target": "id=x"}]}]), "step-without-action.json"),
+    (json.dumps([{"title": "t", "steps": [{"action": "click", "target": "id=x"}] * 201}]), "too-many-steps.json"),
+    (json.dumps({"locators": {"login": "#login-button"}, "users": ["standard_user"]}), "data.json"),
+])
+def test_nothing_in_a_files_content_is_required(content: str, filename: str) -> None:
+    result = read_test_data(content.encode(), filename)
+
+    assert isinstance(result, FreeFormSource) and result.text.strip()
+
+
+def test_csv_keeps_its_text_and_leading_blank_lines_for_the_model() -> None:
+    text = "\n\nTest Key,Summary,Step,Expected Result\nX-1,Login,Open the login page,The form is shown\n"
+
+    result = read_test_data(text.encode(), "xray-export.CSV")
+
+    assert result == FreeFormSource(source_format=TestDataFormat.CSV, text=text)
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        (b"Summary,Steps\n , \n,,\n", "no rows below its header"),
+        ("Summary\n" + "x" * (100 * 1024) + "\n", "at most 100 KB"),
+        ("case_id,title,action\nC1,T," + "x" * 140_000 + "\n", "not valid CSV"),  # was an unhandled error (500)
+    ],
+    ids=["blank-rows", "too-large", "unreadable"],
+)
+def test_a_csv_without_rows_too_large_or_unreadable_is_refused(content: bytes | str, message: str) -> None:
+    data = content.encode() if isinstance(content, str) else content
+    with pytest.raises(ValidationError, match=message):
+        read_test_data(data, "x.csv")
+
+
+# ---------- JSON whole in our own shape: read at once, without a model ----------
+
 def test_json_list_and_object_shapes() -> None:
-    as_list = parse_test_data(json.dumps(CASES).encode(), "cases.json")
-    as_object = parse_test_data(json.dumps({"test_cases": CASES}).encode(), "cases.JSON")
+    as_list = _read_at_once(json.dumps(CASES).encode(), "cases.json")
+    as_object = _read_at_once(json.dumps({"test_cases": CASES}).encode(), "cases.JSON")
 
     assert as_list == as_object
     assert as_list.source_format == TestDataFormat.JSON
@@ -46,7 +136,7 @@ def test_json_list_and_object_shapes() -> None:
 
 
 def test_missing_locator_is_flagged_not_guessed() -> None:
-    result = parse_test_data(json.dumps(CASES).encode(), "cases.json")
+    result = _read_at_once(json.dumps(CASES).encode(), "cases.json")
     second = result.cases[1]
 
     assert second.id == "TD-001"  # it gives no id: the first one new in the project (here: no other test data)
@@ -56,7 +146,14 @@ def test_missing_locator_is_flagged_not_guessed() -> None:
     assert result.warnings == ["case TD-001 step 1: click needs a locator"]
 
 
-def test_ids_our_formats_do_not_give_are_new_in_the_project_and_given_ones_are_kept() -> None:
+def test_a_case_with_only_its_words_and_no_steps_is_a_case() -> None:
+    result = _read_at_once(json.dumps([{"id": "QX-1", "title": "A locked-out user cannot sign in", "steps": []}]).encode(),
+                           "cases.json")
+
+    assert [(case.id, case.title, case.steps) for case in result.cases] == [("QX-1", "A locked-out user cannot sign in", [])]
+
+
+def test_ids_the_file_does_not_give_are_new_in_the_project_and_given_ones_are_kept() -> None:
     # Every upload numbered its cases without an id from 1 (TC-1, TC-2, ...), so a project had several TC-1 tests.
     cases = [
         {"title": "Login", "steps": [{"action": "open", "target": "https://x.test"}]},
@@ -66,7 +163,6 @@ def test_ids_our_formats_do_not_give_are_new_in_the_project_and_given_ones_are_k
     txgenie = {
         "test_cases": [{"title": "Login", "steps": [{"action": "Open the site", "expected_result": "It opens"}]}],
     }
-    csv_text = "case_id,title,action,target\n,Login,open,https://x.test\nC1,Cart,open,https://x.test/cart\n"
     taken = {"TD-001", "TD-002", "C1"}
 
     def ids(content: str, filename: str, taken_ids: Collection[str] = ()) -> list[str]:
@@ -76,85 +172,15 @@ def test_ids_our_formats_do_not_give_are_new_in_the_project_and_given_ones_are_k
     assert ids(json.dumps(cases), "a.json") == ["TD-002", "TD-001", "TD-003"]
     assert ids(json.dumps(cases), "a.json", taken) == ["TD-003", "TD-001", "TD-004"]
     assert ids(json.dumps(txgenie), "b.json", taken) == ["TD-003"]
-    assert ids(csv_text, "c.csv", taken) == ["TD-003", "C1"]
 
 
-def test_an_error_still_names_a_case_without_an_id_by_its_place_in_the_file() -> None:
-    # Nothing is stored after an error: the user finds the case in the file, where no new id exists yet.
-    no_title = [
-        {"id": "A-1", "title": "Ok", "steps": [{"action": "open", "target": "u"}]},
-        {"steps": [{"action": "open"}]},
-    ]
-    duplicate = [{"id": "TD-001", "title": "t", "steps": [{"action": "open", "target": "u"}]}] * 2
+def test_an_id_the_file_repeats_gets_a_suffix_never_a_refusal() -> None:
+    # Two rows of one scenario, copied with the same id: both are cases, named apart (tests are named after ids).
+    cases = [{"id": "TD-001", "title": "t", "steps": [{"action": "open", "target": "u"}]}] * 3
 
-    with pytest.raises(ValidationError, match="Test case TC-2: 'title' is required"):
-        read_test_data(json.dumps(no_title).encode(), "x.json", {"TD-001"})
-    with pytest.raises(ValidationError, match="'TD-001' is used more than once"):  # still strict: never renamed
-        read_test_data(json.dumps(duplicate).encode(), "x.json")
+    result = _read_at_once(json.dumps(cases).encode(), "x.json")
 
-
-def test_csv_rows_grouped_by_case_with_bom() -> None:
-    csv_text = (
-        "﻿Case_ID,Title,Action,Target,Value,Expected,Tags\n"
-        "C1,Login,open,https://x.test,,,smoke;login\n"
-        "C1,Login,type,id=user,bob,,\n"
-        "C2,Logout,click,,,,\n"
-    )
-
-    result = parse_test_data(csv_text.encode("utf-8"), "data.csv")
-
-    assert result.source_format == TestDataFormat.CSV
-    assert [(c.id, len(c.steps)) for c in result.cases] == [("C1", 2), ("C2", 1)]
-    assert result.cases[0].tags == ["smoke", "login"]
-    assert result.cases[1].steps[0].needs_locator is True
-
-
-@pytest.mark.parametrize(
-    ("content", "filename", "message"),
-    [
-        (b"[]", "x.xlsx", ".json, .csv, .txt, .md, .text or .feature file"),
-        (b"{not json", "x.json", "line 1"),
-        (b'{"cases": []}', "x.json", "list of test cases"),
-        (b"[]", "x.json", "no test cases"),
-        (json.dumps([{"steps": [{"action": "click"}]}]).encode(), "x.json", "'title' is required"),
-        (json.dumps([{"title": "t", "steps": []}]).encode(), "x.json", "'steps' is required"),
-        (json.dumps([{"title": "t", "steps": [{"target": "id=x"}]}]).encode(), "x.json", "'action' is required"),
-        (json.dumps([{"id": "A", "title": "t", "steps": [{"action": "open"}]}] * 2).encode(), "x.json", "used more than once"),
-        (b"title,action\nx,click\n", "x.csv", "case_id"),
-        (b"\xff\xfe\x00", "x.json", "UTF-8"),
-    ],
-)
-def test_bad_input_is_explained(content: bytes, filename: str, message: str) -> None:
-    with pytest.raises(ValidationError, match=message):
-        parse_test_data(content, filename)
-
-
-def test_the_message_for_another_file_type_names_every_type_that_is_accepted() -> None:
-    # It named .json, .csv, .txt and .md, while .text and .feature files were accepted too.
-    with pytest.raises(ValidationError) as caught:
-        read_test_data(b"[]", "cases.xlsx")
-
-    assert re.findall(r"\.(\w+)", caught.value.message) == [*STRUCTURED_EXTENSIONS, *TEXT_EXTENSIONS]
-
-
-def test_csv_rows_of_one_case_with_another_title_stay_in_that_case_and_are_reported() -> None:
-    # Rows with the same case_id are one case, and a blank title after its first row is normal. A row with another
-    # title is likely a copied id: it stays a step of that case (splitting it would need a new id) and is reported.
-    csv_text = (
-        "case_id,title,action,target,value\n"
-        "C1,Login,open,https://x.test,\n"
-        "C1,,type,id=user,bob\n"
-        "C1,Logout,click,id=logout,\n"
-        "C1, logout ,click,id=menu,\n"
-        "C2,Cart,open,https://x.test/cart,\n"
-    )
-
-    result = parse_test_data(csv_text.encode(), "data.csv")
-
-    assert [(case.id, case.title, len(case.steps)) for case in result.cases] == [("C1", "Login", 4), ("C2", "Cart", 1)]
-    assert result.warnings == [
-        "case C1: the row titled 'Logout' was read as a step of 'Login' (rows with the same case_id are one case)"
-    ]
+    assert [case.id for case in result.cases] == ["TD-001", "TD-001-2", "TD-001-3"]
 
 
 def test_a_step_keeps_every_locator_given_for_its_element() -> None:
@@ -169,7 +195,7 @@ def test_a_step_keeps_every_locator_given_for_its_element() -> None:
         }
     ]
 
-    result = parse_test_data(json.dumps(cases).encode(), "cases.json")
+    result = _read_at_once(json.dumps(cases).encode(), "cases.json")
 
     steps = result.cases[0].steps
     assert steps[0].target == "id=submit"
@@ -179,20 +205,7 @@ def test_a_step_keeps_every_locator_given_for_its_element() -> None:
     assert steps[1].alternate_locators == ["name=username"]
 
 
-def test_limits() -> None:
-    with pytest.raises(ValidationError, match="larger than"):
-        parse_test_data(b"x" * (MAX_TEST_DATA_BYTES + 1), "x.json")
-    too_many_steps = [{"title": "t", "steps": [{"action": "click", "target": "id=x"}] * 201}]
-    with pytest.raises(ValidationError, match="more than 200 steps"):
-        parse_test_data(json.dumps(too_many_steps).encode(), "x.json")
-    too_many_cases = [{"id": str(i), "title": "t", "steps": [{"action": "open", "target": "u"}]} for i in range(501)]
-    with pytest.raises(ValidationError, match="more than 500"):
-        parse_test_data(json.dumps(too_many_cases).encode(), "x.json")
-
-
 def test_a_txgenie_steps_locator_becomes_its_target() -> None:
-    from app.utils.TestDataParser import read_test_data
-
     case = {"id": "TC001", "title": "Login", "steps": [
         {"step_number": 1, "action": "Click the Login button (locator: [data-test='login-button'])", "test_data": "",
          "expected_result": "The products page opens"},
@@ -204,49 +217,3 @@ def test_a_txgenie_steps_locator_becomes_its_target() -> None:
     data_set = read_test_data(json.dumps({"test_cases": [case]}).encode(), "txgenie.json")
 
     assert [step.target for step in data_set.cases[0].steps] == ["[data-test='login-button']", "#user-name", None]
-
-
-# ---------- CSV in any other shape ----------
-
-def test_csv_with_other_columns_is_a_free_form_source() -> None:
-    from app.utils.TestDataParser import FreeFormSource, read_test_data
-
-    text = "\n\nTest Key,Summary,Step,Expected Result\nX-1,Login,Open the login page,The form is shown\n"
-
-    result = read_test_data(text.encode(), "xray-export.CSV")
-
-    assert result == FreeFormSource(source_format=TestDataFormat.CSV, text=text)
-
-
-def test_our_csv_columns_after_blank_lines_are_still_our_format() -> None:
-    from app.utils.TestDataParser import read_test_data
-
-    result = read_test_data(b"\n case_id , Title,ACTION,target\nC1,Login,open,https://x.test\n", "cases.csv")
-
-    assert result.source_format == TestDataFormat.CSV
-    assert [(case.id, case.steps[0].target) for case in result.cases] == [("C1", "https://x.test")]
-
-
-@pytest.mark.parametrize(
-    ("content", "message"),
-    [
-        (b"", "empty"),
-        (b"  \n\n", "empty"),
-        (b"Summary,Steps\n", "no rows below its header"),
-        (b"Summary,Steps\n , \n,,\n", "no rows below its header"),
-        (b"case_id,title,action\n", "no test cases"),  # our format, strict as before
-        (b"case_id,title,action\nC1,,click\n", "'title' is required"),
-        ("Summary\n" + "x" * (100 * 1024) + "\n", "at most 100 KB"),
-        ("case_id,title,action\nC1,T," + "x" * 140_000 + "\n", "not valid CSV"),  # was an unhandled error (500)
-    ],
-    ids=[
-        "no-bytes", "blank", "header-only", "blank-rows", "our-format-no-rows", "our-format-strict", "too-large",
-        "unreadable",
-    ],
-)
-def test_empty_or_too_large_csv_is_rejected(content: bytes | str, message: str) -> None:
-    from app.utils.TestDataParser import read_test_data
-
-    data = content.encode() if isinstance(content, str) else content
-    with pytest.raises(ValidationError, match=message):
-        read_test_data(data, "x.csv")

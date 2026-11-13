@@ -25,6 +25,7 @@ from app.models.testDataModel import (
 from app.models.tokenUsageModel import TokenUsageModel
 from app.services.testDataService import TestDataProcessor, TestDataService
 from app.utils.LlmInstance import MODEL_NOT_ANSWERING
+from app.utils.TestDataParser import NoTestCases
 
 DATA_SET = TestDataSetModel(
     source_format=TestDataFormat.TEXT,
@@ -46,6 +47,7 @@ class FakeService:
         self.uploads = {upload.id: upload for upload in uploads}
         self.ready: dict[str, TestDataSetModel] = {}
         self.failed: dict[str, str] = {}
+        self.context: list[str] = []
         self.token_usage: dict[str, TokenUsageModel | None] = {}
 
     async def get_by_id(self, test_data_id: str) -> TestDataUploadModel:
@@ -74,6 +76,14 @@ class FakeService:
         if revision is not None and revision != self.uploads[test_data_id].revision:
             return False
         self.failed[test_data_id] = reason
+        self.token_usage[test_data_id] = token_usage
+        return True
+
+    async def mark_context(self, test_data_id: str, revision: int | None = None,
+                           token_usage: TokenUsageModel | None = None) -> bool:
+        if revision is not None and revision != self.uploads[test_data_id].revision:
+            return False
+        self.context.append(test_data_id)
         self.token_usage[test_data_id] = token_usage
         return True
 
@@ -167,12 +177,26 @@ async def test_a_source_edited_while_it_is_read_is_read_again_and_only_the_new_v
 @pytest.mark.anyio
 async def test_unreadable_source_is_marked_failed_with_the_reason() -> None:
     service = FakeService(_upload("t1"))
-    processor, _ = _processor(service, ValueError("no test cases were found in the source"))
+    processor, _ = _processor(service, ValueError("part 1 of the source could not be read: the model call failed"))
 
     await processor.submit("t1")
     await _settle(processor)
 
-    assert service.failed == {"t1": "The test data could not be turned into test cases: no test cases were found in the source"}
+    assert service.failed == {
+        "t1": "The test data could not be turned into test cases: part 1 of the source could not be read: the model call failed"
+    }
+
+
+@pytest.mark.anyio
+async def test_a_source_without_test_cases_is_kept_as_context_not_failed() -> None:
+    # A locator sheet or a note: part of the generator's knowledge base, never a red "failed" in the list.
+    service = FakeService(_upload("t1"))
+    processor, _ = _processor(service, NoTestCases("no test cases were found in the source"))
+
+    await processor.submit("t1")
+    await _settle(processor)
+
+    assert service.context == ["t1"] and service.failed == {} and service.ready == {}
 
 
 @pytest.mark.anyio

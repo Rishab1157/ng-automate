@@ -26,7 +26,7 @@ from app.models.testDataModel import TestCaseSpecModel, TestDataFormat, TestData
 from app.models.tokenUsageModel import TokenUsageModel
 from app.utils.LlmInstance import check_model_answers
 from app.utils.StructuredOutput import complete_json
-from app.utils.TestDataParser import NAVIGATION_ACTIONS, build_test_data_set, new_case_ids
+from app.utils.TestDataParser import NAVIGATION_ACTIONS, NoTestCases, build_test_data_set, new_case_ids
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +50,19 @@ INSTRUCTIONS = (
     "You turn test documentation into automated-test cases. The source is split into blocks marked [B1], [B2], ... "
     "Return one case per test case, scenario or acceptance criterion; list the block ids each case comes from. "
     "Steps the source writes once for all its cases (a setup or background section) belong to every case: put them "
-    "first in each case. A source that does not describe how to test software (for example a recipe or a story) has "
-    "no cases: return an empty 'cases' list. "
+    "first in each case. A source that is not about software at all (for example a recipe or a novel) has no cases: "
+    "return an empty 'cases' list. "
+    # A real run: three plain sentences about what shoppers can do came back as no case at all (the rule named "a
+    # story" as an example of no test documentation, and users upload user stories).
+    "User stories, requirements, acceptance criteria and plain sentences about what users can do in an application "
+    "ARE test documentation, also without ids, titles, values or locators: each behaviour they describe is one case, "
+    "its actions as steps in the source's own words and its outcome as the verify step. "
+    # A real run with a hosted model: developer notes that only named locators came back as two "cases".
+    "A source that only lists locators, selectors, element ids, accounts, URLs or settings (a locator sheet, notes "
+    "from developers) describes no behaviour to test: it has no cases, list its blocks in not_test_cases. "
+    # A real run: "a signed-in shopper adds the backpack" became a test that never signed in.
+    "A state the source takes for granted before the steps (a signed-in shopper, an item already in the cart) goes "
+    "into 'preconditions' in the source's words, so the test sets it up first. "
     "Every case MUST end with a verify step for the source's expected result - a verify step repeats the source's own "
     "words, so it is never an invention. Use verify_visible for a page, banner or element that must appear (name it "
     "in 'target_hint', copy the expected words into 'expected'), verify_text for text that must be shown (exact text "
@@ -149,9 +160,12 @@ class TestCaseExtractor:
                 continue
             raw_cases.extend(_grounded_case(case, source_blocks, warnings) for case in reply["cases"])
 
-        cases = _unique(_dedupe([case for case in raw_cases if case["steps"]]), taken_ids)
+        # A case with a title but no step is still a case (steps are detail): the generator works them out.
+        cases = _unique(_dedupe([case for case in raw_cases if case["steps"] or (case["title"] or "").strip()]), taken_ids)
         if not cases:
-            raise ValueError(failures[0] if failures else NO_CASES_FOUND)
+            if failures:
+                raise ValueError(failures[0])
+            raise NoTestCases(NO_CASES_FOUND)
         data_set = build_test_data_set(cases, source_format)
         return data_set.model_copy(update={"warnings": [*failures, *warnings, *data_set.warnings]})
 
@@ -301,7 +315,8 @@ def _schema(block_ids: list[str]) -> dict[str, Any]:
             "id": nullable,
             "title": {"type": "string"},
             "preconditions": {"type": "array", "items": {"type": "string"}},
-            "steps": {"type": "array", "minItems": 1, "maxItems": MAX_STEPS_PER_CASE, "items": step},
+            # Steps are detail the source may not give (a one-line story): the generator works them out.
+            "steps": {"type": "array", "maxItems": MAX_STEPS_PER_CASE, "items": step},
             "tags": {"type": "array", "items": {"type": "string"}},
         },
     }

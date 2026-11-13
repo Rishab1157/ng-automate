@@ -87,6 +87,10 @@ ENVIRONMENT_MESSAGE_PATTERN = re.compile(
 # Test failure messages that mean "the element was not found": a locator or test data problem.
 LOCATOR_PATTERN = re.compile(
     r"NoSuchElementException|no such element|Unable to locate element|ElementNotInteractableException"
+    # Selenium 4 writes the exception's message, not its class: "element not interactable", "element click
+    # intercepted" (a real run: a generated logout test clicked a menu link before it could be clicked, and the
+    # failure counted as a failed check, so the healer never tried).
+    r"|element not interactable|element click intercepted|is not clickable at point"
     r"|StaleElementReferenceException|ElementClickInterceptedException|waiting for locator|locator\.\w+: Timeout"
     r"|Timed out retrying after|waiting for (visibility|presence|element)|located by By\."
     r"|strict mode violation",

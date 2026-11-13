@@ -5,10 +5,13 @@ from app.models.tokenUsageModel import TokenUsageModel
 
 
 class SkippedCaseModel(BaseModel):
-    """A test case the generator left out, and why (it has no steps, or the generator stopped before it)."""
+    """A test case the generator left out, and why (it has no steps, the generator stopped before it, or an earlier
+    generation's test already covers it)."""
 
     case_id: str
     reason: str
+    # The earlier generation's test file that covers the case (project-relative); None when it is left out otherwise.
+    covered_by: str | None = None
 
 
 class UnverifiedLocatorModel(BaseModel):

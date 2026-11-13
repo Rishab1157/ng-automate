@@ -19,7 +19,7 @@ class TestDataUploadModel(BaseModel):
     filename: str
     source_format: TestDataFormat
     status: TestDataStatus
-    # Free-form JSON or text, kept for the LLM (and a retry). None for our own JSON/CSV format.
+    # Free-form JSON or text, kept for the LLM (and a retry). None for JSON read at once.
     raw_source: str | None = None
     # The model that reads a free-form source; None means the default model from .env.
     model_connection_id: str | None = None

@@ -30,7 +30,7 @@ from app.core.exceptions import ErrorMessages, GenerationError, ValidationError
 from app.models.analyzerModel import FactSheetModel
 from app.models.healerModel import FileChangeModel, HealOutcomeModel
 from app.models.healMemoryModel import HealMemoryDbModel, HealMemoryModel, HealMemoryResult, memory_point_id
-from app.models.testDataModel import TestCaseSpecModel, TestDataFormat, TestDataSetModel, TestDataStatus, TestStepModel
+from app.models.testDataModel import TestCaseSpecModel, TestDataFormat, TestDataSetModel, TestStepModel
 from app.models.testGeneratorModel import GenerationOutcomeModel, SkippedCaseModel, UnverifiedLocatorModel
 from app.models.runModel import (
     RunEventLevel,
@@ -462,7 +462,7 @@ GENERATED = GenerationOutcomeModel(
     summary="Wrote login.feature",
     files=[FileChangeModel(path="src/test/resources/features/ngauto/login.feature", change="added", diff="+@ngauto")],
     generated_cases=["LOGIN-1"],
-    skipped_cases=[SkippedCaseModel(case_id="LOGOUT-1", reason="the case has no steps")],
+    skipped_cases=[SkippedCaseModel(case_id="LOGOUT-1", reason="the test generator stopped before it finished this case")],
     unverified_locators=[UnverifiedLocatorModel(path="src/test/java/LoginSteps.java", line=7, code='By.id("go")')],
 )
 TEST_DATA = TestDataSetModel(
@@ -481,9 +481,9 @@ class FakeGenerator:
 
     def generate(self, workspace: Any, project_dir: Path, data_set: TestDataSetModel, fact_sheet: FactSheetModel,
                  findings: Any, command: TestCommandModel, on_event: Any = None, control: Any = None,
-                 instructions: str | None = None) -> GenerationOutcomeModel:
+                 instructions: str | None = None, test_data_dir: Path | None = None) -> GenerationOutcomeModel:
         self.calls.append({"workspace": workspace, "data_set": data_set, "findings": findings, "command": command,
-                           "instructions": instructions})
+                           "instructions": instructions, "test_data_dir": test_data_dir})
         on_event(AgentEvent(RunEventType.AGENT_ACTION, RunEventLevel.INFO, "create login.feature", {"tool": "file_editor"}))
         return self.outcome
 
@@ -492,9 +492,9 @@ class FakeTestData:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str]] = []
 
-    async def get(self, test_data_id: str, project_id: str, org_id: str) -> Any:
+    async def cases_for_generation(self, project_id: str, org_id: str, test_data_id: str | None = None) -> Any:
         self.calls.append((test_data_id, project_id, org_id))
-        return SimpleNamespace(status=TestDataStatus.READY, data_set=TEST_DATA)
+        return TEST_DATA
 
 
 class FakeLatestProfile:
@@ -548,6 +548,8 @@ async def test_generate_tests_saves_the_outcome_and_reports_it(tmp_path: Path) -
     assert test_data.calls == [("data-1", state["project_id"], state["org_id"])]
     [call] = generator.calls
     assert call["data_set"] == TEST_DATA and call["findings"] == "the findings"
+    # Every file the user gave the project is the generator's knowledge base, not only the one the cases came from.
+    assert call["test_data_dir"] == setup.sandbox.test_data_dir(state["project_id"])
     assert call["workspace"] is setup.sandbox.workspace
     assert setup.sandbox.writable_org == state["org_id"]
     assert runs.containers == [CONTAINER_ID, None]
@@ -570,6 +572,53 @@ async def test_generation_without_files_fails_the_run(tmp_path: Path) -> None:
 
     assert caught.value.message == "The test generator stopped: the generator wrote no test files"
     assert setup.runs.outputs["generation"] == empty
+
+
+COVERED = SkippedCaseModel(
+    case_id="LOGIN-1", reason="an earlier generation already tests it in src/test/java/ngauto/LoginTest.java",
+    covered_by="src/test/java/ngauto/LoginTest.java",
+)
+
+
+@pytest.mark.anyio
+async def test_generating_again_with_every_case_already_tested_completes_without_files(tmp_path: Path) -> None:
+    # The same test data again on a project whose 'ngauto' folder already tests it: nothing new to write is no failure.
+    nothing_new = GenerationOutcomeModel(summary="Already covered.", skipped_cases=[COVERED])
+    setup, _, _ = _generate_setup(tmp_path, nothing_new)
+
+    await setup.nodes.generate_tests(_generate_state(tmp_path))
+
+    completed = setup.runs.completed_event(RunStage.GENERATING_TESTS)
+    assert completed.message == "No new tests needed · 1 case already tested by an earlier generation"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("update", [
+    {"generated_cases": ["LOGOUT-1"]},  # another case needed a test, and none was written
+    {"error": "The test generator stopped: the agent did not finish in time"},
+])
+async def test_no_files_still_fails_when_a_case_needed_a_test_or_the_generator_stopped(
+    tmp_path: Path, update: dict[str, Any]
+) -> None:
+    outcome = GenerationOutcomeModel(summary="", skipped_cases=[COVERED], **update)
+    setup, _, _ = _generate_setup(tmp_path, outcome)
+
+    with pytest.raises(GenerationError):
+        await setup.nodes.generate_tests(_generate_state(tmp_path))
+
+
+@pytest.mark.anyio
+async def test_covered_cases_are_told_apart_from_cases_left_out(tmp_path: Path) -> None:
+    outcome = GENERATED.model_copy(update={"skipped_cases": [*GENERATED.skipped_cases, COVERED]})
+    setup, _, _ = _generate_setup(tmp_path, outcome)
+
+    await setup.nodes.generate_tests(_generate_state(tmp_path))
+
+    completed = setup.runs.completed_event(RunStage.GENERATING_TESTS)
+    assert completed.message == (
+        "Wrote tests for 1 case in 1 file · 1 case already tested by an earlier generation · 1 assumed locator to check"
+        " · 1 case left out"
+    )
 
 
 # --------------------------------------------------------------------------- the healer's memory

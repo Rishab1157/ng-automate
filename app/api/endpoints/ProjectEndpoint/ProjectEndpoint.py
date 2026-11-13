@@ -35,18 +35,17 @@ from app.services.testDataService import TestDataService, test_data_processor
 from app.utils.TestDataParser import (
     ACCEPTED_EXTENSIONS,
     MAX_TEST_DATA_BYTES,
-    STRUCTURED_EXTENSIONS,
     TEXT_EXTENSIONS,
 )
 
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 PROJECT_DELETED = "Project deleted successfully"
+TEST_DATA_DELETED = "Test data deleted successfully"
 MODEL_CONNECTION_QUERY = (
     "QXcel model connection (enabled for NG Automate) that reads a free-form source. Ignored when the server uses its "
     "local model (USE_LOCAL_LLM); required otherwise."
 )
-# The file types the test-data parser accepts, as the upload documents them (".json, .csv").
-STRUCTURED_FILE_TYPES = ", ".join(f".{name}" for name in STRUCTURED_EXTENSIONS)
+# The file types the test-data parser accepts, as the upload documents them (".txt, .md, ...").
 TEXT_FILE_TYPES = ", ".join(f".{name}" for name in TEXT_EXTENSIONS)
 TEST_DATA_FILE_TYPES = ", ".join(f".{name}" for name in ACCEPTED_EXTENSIONS)
 
@@ -195,15 +194,18 @@ async def get_project_profile(project_id: str, org_id: str = Depends(resolve_org
     "/{project_id}/test-data",
     status_code=status.HTTP_201_CREATED,
     response_model=TestDataResponseDTO,
-    summary="Upload a test-data source for the test generator: our JSON/CSV test-case format (ready at once, 201), "
-    f"or JSON / CSV in any other shape or plain text ({TEXT_FILE_TYPES}) that an LLM turns into test cases in the "
-    "background (202, status processing: poll it). Invalid or empty files are rejected.",
+    summary="Upload a file of the project's knowledge base: test cases, stories, locators, notes, in any form. JSON "
+    "whole in NG Automate's own (or TXGENIE's) test-case shape is ready at once (201); any other JSON, CSV or plain "
+    f"text ({TEXT_FILE_TYPES}) is read by an LLM in the background (202, status processing: poll it; a file without "
+    "test cases ends as status context). Nothing in a file's content is required: only an empty file or broken "
+    "syntax is rejected.",
 )
 async def upload_test_data(
     project_id: str,
     response: Response,
     file: UploadFile = File(
-        description=f"Test cases ({STRUCTURED_FILE_TYPES}) or a free-form source ({TEST_DATA_FILE_TYPES})"
+        description=f"Any plain-text file of the project's knowledge base ({TEST_DATA_FILE_TYPES}), written however "
+        "the user writes it"
     ),
     model_connection_id: str | None = Query(None, description=MODEL_CONNECTION_QUERY),
     org_id: str = Depends(resolve_org_id),
@@ -273,9 +275,10 @@ async def get_test_data_content(
 @router.put(
     "/{project_id}/test-data/{test_data_id}/content",
     response_model=TestDataResponseDTO,
-    summary="Save a test-data file's new text from the editor and read it again: our own JSON/CSV test-case format is "
-    "ready at once (200); anything else is read by an LLM in the background (202, status processing: poll it). "
-    "Invalid text is rejected (400) and nothing changes; 409 while a run uses the project.",
+    summary="Save a test-data file's new text from the editor and read it again: JSON whole in NG Automate's own "
+    "test-case shape is ready at once (200); anything else is read by an LLM in the background (202, status "
+    "processing: poll it). Only empty text or broken syntax is rejected (400, nothing changes); 409 while a run uses "
+    "the project.",
 )
 async def save_test_data_content(
     project_id: str,
@@ -307,6 +310,19 @@ async def retry_test_data(
     upload = await test_data_service.retry(test_data_id, project_id, org_id, model_connection_id)
     await test_data_processor.submit(upload.id)
     return TestDataResponseDTO.from_model(upload)
+
+
+@router.delete(
+    "/{project_id}/test-data/{test_data_id}",
+    response_model=ProjectDeletedResponseDTO,
+    summary="Delete a test-data file (one uploaded by mistake): its record and the stored file are removed. 409 "
+    "PROJECT_BUSY while a run uses the project.",
+)
+async def delete_test_data(
+    project_id: str, test_data_id: str, org_id: str = Depends(resolve_org_id)
+) -> ProjectDeletedResponseDTO:
+    await test_data_service.delete(test_data_id, project_id, org_id)
+    return ProjectDeletedResponseDTO(message=TEST_DATA_DELETED)
 
 
 async def _read_chunks(file: UploadFile) -> AsyncIterator[bytes]:

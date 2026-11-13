@@ -71,6 +71,23 @@ def test_mostly_locator_failures_go_to_the_healer() -> None:
     assert result.healable  # e.g. a locator the generator assumed: the healer finds the real one on the live page
 
 
+def test_an_element_that_cannot_be_acted_on_is_a_locator_failure_the_healer_gets() -> None:
+    # A real run of generated tests: Selenium 4 writes the message, not the exception class. A logout test clicked a
+    # menu link before it could be clicked, a cart test waited for a button on a page it never reached: both counted
+    # as failed checks, so the healer never tried.
+    cases = [
+        _case(TestCaseStatus.FAILED, "element not interactable (at com.demo.pages.LoginPage.logout(LoginPage.java:43))"),
+        _case(TestCaseStatus.FAILED, "Expected condition failed: waiting for element to be clickable: By.cssSelector: "
+                                     "[data-test='add-to-cart-sauce-labs-backpack'] (tried for 10 second(s))"),
+        _case(TestCaseStatus.FAILED, "element click intercepted: Element <a id=\"logout_sidebar_link\"> is not clickable "
+                                     "at point (50, 200). Other element would receive the click"),
+    ]
+
+    result = classify_failure(1, "Tests run: 3, Failures: 3", cases)
+
+    assert (result.kind, result.healable) == (FailureKind.LOCATOR_FAILURE, True)
+
+
 def test_locator_failures_are_for_the_user_when_locator_healing_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "HEAL_LOCATOR_FAILURES", False)
 

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from app.core.exceptions import ErrorMessages, NgAutomateException, NotFoundError
 from app.models.testDataModel import TestDataStatus
 from app.utils.AgentLibraries import load_agent_libraries
+from app.utils.TestDataParser import NoTestCases
 
 if TYPE_CHECKING:
     from app.agents.TestGeneratorAgent.TestCaseExtractor import TestCaseExtractor
@@ -121,6 +122,9 @@ class TestDataProcessor:
             return await service.mark_failed(
                 test_data_id, error.message, upload.revision, token_usage=_token_usage(test_data_id, extractor)
             )
+        except NoTestCases:
+            # Locators, accounts, notes: no failure, the file is part of the generator's knowledge base.
+            return await service.mark_context(test_data_id, upload.revision, token_usage=_token_usage(test_data_id, extractor))
         except ValueError as error:
             reason = ErrorMessages.TEST_DATA_READ_FAILED.format(reason=str(error))
             return await service.mark_failed(

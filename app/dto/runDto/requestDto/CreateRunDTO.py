@@ -30,7 +30,9 @@ class CreateRunDTO(BaseModel):
     )
 
     test_data_id: str | None = Field(
-        None, description="Generate mode only: the test data to write tests from (POST /project/{id}/test-data)."
+        None,
+        description="Generate mode only, optional: write tests for the cases of this one file only. Without it, "
+        "every file of the project that has test cases is used (all of them are also the agent's knowledge base).",
     )
     instructions: str | None = Field(
         None,

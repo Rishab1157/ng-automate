@@ -69,8 +69,8 @@ class ErrorMessages:
     TEST_DATA_RETRY_NOT_ALLOWED = "Only test data that failed to be read can be read again"
     TEST_DATA_READ_FAILED = "The test data could not be turned into test cases: {reason}"
     TEST_DATA_NOT_TEXT = "This test-data file is not UTF-8 text: download it to see it"
-    TEST_DATA_REQUIRED = "A generate run needs test_data_id: upload test data for the project first"
-    NO_RUNNABLE_TEST_CASES = "None of the test cases can be generated: none of them has any steps"
+    TEST_DATA_STILL_READING = "A test-data file is still being read: start the generation when it has finished"
+    NO_RUNNABLE_TEST_CASES = "The test data has no test cases to generate"
 
     # Project files (the editor)
     FILE_NOT_FOUND = "File not found"
@@ -79,6 +79,7 @@ class ErrorMessages:
     FILE_TOO_LARGE_TO_EDIT = "The file is larger than {limit_kb} KB: too large to edit here"
     PROJECT_BUSY = "A run is using this project: its files can be edited again when the run has finished"
     PROJECT_BUSY_DELETE = "A run is using this project: stop it, or wait until it has finished, then delete the project"
+    PROJECT_BUSY_TEST_DATA_DELETE = "A run is using this project: delete the file when the run has finished"
 
     # Sandbox
     SANDBOX_FAILED = "The sandbox could not be started: {reason}"

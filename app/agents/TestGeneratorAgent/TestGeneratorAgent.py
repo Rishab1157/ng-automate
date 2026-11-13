@@ -7,6 +7,10 @@ method, a base-class helper, a dependency). Nothing it writes is ever rolled bac
 user's rule: the framework may need those changes, and a rollback after the build check once left a project that no
 longer compiled). A change that looks like weakening the project (a deleted file, a removed assertion, a skipped test)
 is reported for the user to review. It only writes the tests: a test run runs them.
+
+No redundant tests: before the agent starts, a case that a test an earlier generation wrote in the 'ngauto' folder
+already covers (by what the tests do, never by ids or names: ExistingCoverage, RedundancyJudge) is left out with the
+reason, so the agent writes only the new ones.
 """
 
 import logging
@@ -29,11 +33,18 @@ from app.agents.HealerAgent.HealerGuards import check_changes
 from app.services.sandboxService.SandboxService import SANDBOX_PROJECT_DIR
 from app.agents.TestGeneratorAgent.GeneratedTestPlacement import (
     GENERATED_DIR,
-    runnable_cases,
     tests_not_run_by_default,
     unverified_locators,
 )
+from app.agents.TestGeneratorAgent.ExistingCoverage import (
+    JUDGED_SAME,
+    SAME_VALUES,
+    earlier_test_files,
+    same_values_test,
+)
 from app.agents.TestGeneratorAgent.GenerationState import collect_state, describe_state
+from app.agents.TestGeneratorAgent.KnowledgeBase import knowledge_base
+from app.agents.TestGeneratorAgent.RedundancyJudge import Complete, judge_case
 from app.agents.TestGeneratorAgent.ProjectTestBriefing import project_test_briefing
 from app.agents.TestGeneratorAgent.TestGeneratorPrompts import (
     build_finish_prompt,
@@ -46,9 +57,10 @@ from app.core.exceptions import ErrorMessages, GenerationError, ValidationError
 from app.models.analyzerModel import AnalyzerFindingsModel, FactSheetModel
 from app.models.llmModel import LlmConfigModel
 from app.models.runModel import RunEventLevel, RunEventType
-from app.models.testDataModel import TestDataSetModel
+from app.models.testDataModel import TestCaseSpecModel, TestDataSetModel
 from app.models.testGeneratorModel import GenerationOutcomeModel, SkippedCaseModel
 from app.models.testRunModel import TestCommandModel
+from app.models.tokenUsageModel import TokenUsageModel
 from app.utils.AgentConversationUtils import (
     AgentControl,
     EventForwarder,
@@ -60,6 +72,7 @@ from app.utils.AgentConversationUtils import (
 )
 from app.utils.LlmInstance import build_llm
 from app.utils.ProjectSnapshot import ProjectSnapshot, project_fingerprint
+from app.utils.StructuredOutput import complete_json
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +96,14 @@ NOT_CHECKED_NOTICE = (
 )
 NOT_BUILDING_SUMMARY = "The build check still failed at the end: the generated tests do not build yet."
 DUPLICATES_NOTICE ="Some test cases are in more than one generated file ({cases}): the generator is asked to keep one"
+CHECKING_NOTICE = (
+    "The 'ngauto' folder already has {tests} test files from an earlier generation: checking which of the {cases} "
+    "cases they already cover"
+)
+COVERED_NOTICE = "{case}: no new test, {reason}"
+NOT_JUDGED_NOTICE = "Could not tell whether {case} is already tested ({problem}): its test is written"
+MAX_LISTED_TESTS = 50
+NOTHING_NEW_SUMMARY ="Every test case is already tested by a test an earlier generation wrote: no new test was needed."
 MAX_BUILD_ERROR_LINES = 40
 MAX_BUILD_ERROR_CHARS = 4000
 # Lines kept after each line that names an error: the file and line, or the cause, usually follow it (a Node "Cannot
@@ -105,6 +126,7 @@ class TestGeneratorAgent:
         nudges: int = settings.GENERATOR_NUDGES,
         batch_size: int = settings.GENERATOR_BATCH_SIZE,
         fix_rounds: int = settings.GENERATOR_FIX_ROUNDS,
+        complete: Complete = complete_json,
     ) -> None:
         self.llm_config = llm_config
         self.max_iterations = max_iterations
@@ -112,6 +134,7 @@ class TestGeneratorAgent:
         self.nudges = nudges
         self.batch_size = max(1, batch_size)
         self.fix_rounds = max(0, fix_rounds)
+        self.complete = complete  # the redundancy judge's structured LLM call
 
     def generate(
         self,
@@ -124,14 +147,18 @@ class TestGeneratorAgent:
         on_event: Callable[[AgentEvent], None] | None = None,
         control: AgentControl | None = None,
         instructions: str | None = None,
+        test_data_dir: Path | None = None,
     ) -> GenerationOutcomeModel:
         """Blocking: call from a worker thread. `project_dir` is the host copy mounted in the sandbox. `instructions`:
         the user's own words for this run (given when it was created); they come before the default rules.
+        `test_data_dir`: the host folder of the project's test-data files (mounted read-only in the sandbox), shown to
+        the agent as the user's knowledge base.
 
         Raises ValidationError when no case can be generated. Never raises GenerationError: when the agent stops
         early, the outcome says why in `error` (what it wrote so far is still checked and kept).
         """
-        cases, skipped = runnable_cases(data_set.cases)
+        cases = list(data_set.cases)  # every case, whatever it holds: nothing in it is required
+        skipped: list[tuple[str, str]] = []
         if not cases:
             raise ValidationError(ErrorMessages.NO_RUNNABLE_TEST_CASES)
         problem = check_model(workspace, self.llm_config)
@@ -143,7 +170,17 @@ class TestGeneratorAgent:
         # The analyzer's important paths point at the shared code (page objects, fixtures, steps) wherever it lives.
         shared_paths = [item.path for item in findings.important_paths] if findings else []
         briefing = project_test_briefing(snapshot.root, fact_sheet.test_dirs, GENERATED_DIR, shared_paths)
+        # Every text file the user gave (stories, locators, accounts, notes, in any form): the agent's context.
+        user_files = knowledge_base(test_data_dir)
         forwarder = EventForwarder(on_event, secret_values(self.llm_config))
+        # A case a test an earlier generation wrote already covers gets no second one: left out before the agent starts.
+        cases, covered, judge_usage = self._already_tested(cases, snapshot, forwarder, control)
+        if not cases:
+            return GenerationOutcomeModel(
+                summary=NOTHING_NEW_SUMMARY,
+                skipped_cases=[*covered, *(SkippedCaseModel(case_id=case_id, reason=reason) for case_id, reason in skipped)],
+                token_usage=judge_usage,
+            )
         conversation = Conversation(
             agent=self._build_agent(),
             workspace=workspace,
@@ -197,7 +234,7 @@ class TestGeneratorAgent:
                 prompt = (
                     build_generate_prompt(
                         batch, fact_sheet, findings, command, len(cases), briefing, given,
-                        broken_before=built_before is False,
+                        broken_before=built_before is False, knowledge_base=user_files,
                     )
                     if done == 0
                     else build_next_batch_prompt(
@@ -206,6 +243,7 @@ class TestGeneratorAgent:
                         len(cases),
                         [*given, *(control.instructions if control is not None else ())],
                         state(done),
+                        bool(user_files),
                     )
                 )
                 answers.append(self._write_batch(conversation, prompt, snapshot.root, forwarder, control))
@@ -261,13 +299,66 @@ class TestGeneratorAgent:
             summary=(summary or NO_SUMMARY)[:MAX_SUMMARY_CHARS],
             files=changes,
             generated_cases=[case.id for case in cases[:done]],
-            skipped_cases=[SkippedCaseModel(case_id=case_id, reason=reason) for case_id, reason in skipped],
+            skipped_cases=[*covered, *(SkippedCaseModel(case_id=case_id, reason=reason) for case_id, reason in skipped)],
             violations=violations,
             unverified_locators=unverified_locators(snapshot.root, changes),
             builds=builds,
             error=error,
-            token_usage=token_usage,
+            token_usage=judge_usage.add(token_usage) if judge_usage.calls else token_usage,
         )
+
+    def _already_tested(
+        self,
+        cases: list[TestCaseSpecModel],
+        snapshot: ProjectSnapshot,
+        forwarder: EventForwarder,
+        control: AgentControl | None,
+    ) -> tuple[list[TestCaseSpecModel], list[SkippedCaseModel], TokenUsageModel]:
+        """The cases still to write, and the ones a test an earlier generation wrote in an 'ngauto' folder already
+        covers, with why: an earlier test holding all of the case's values and checks, else the judge's answer by
+        meaning (the test data can be in any form). And what the judge's calls used. A stopped run judges no more."""
+        usage = TokenUsageModel()
+        tests = earlier_test_files(snapshot.files)
+        if not tests:
+            return cases, [], usage
+        forwarder.notify(AgentEvent(
+            RunEventType.AGENT_MESSAGE, RunEventLevel.INFO, CHECKING_NOTICE.format(tests=len(tests), cases=len(cases)),
+            {"tests": list(tests)[:MAX_LISTED_TESTS]},
+        ))
+
+        def count(used: TokenUsageModel) -> None:
+            nonlocal usage
+            usage = usage.add(used)
+
+        remaining: list[TestCaseSpecModel] = []
+        covered: list[SkippedCaseModel] = []
+        for case in cases:
+            path = same_values_test(case, tests)
+            if path is not None:
+                reason = SAME_VALUES.format(path=path)
+            elif control is not None and control.is_stopped:
+                remaining.append(case)
+                continue
+            else:
+                verdict = judge_case(self.llm_config, case, tests, snapshot.files, snapshot.root, self.complete, count)
+                if verdict.problem is not None:
+                    forwarder.notify(AgentEvent(
+                        RunEventType.AGENT_ERROR, RunEventLevel.INFO,
+                        clip(NOT_JUDGED_NOTICE.format(case=case.id, problem=verdict.problem), MAX_MESSAGE_CHARS),
+                        {"case": case.id},
+                    ))
+                if verdict.claim is None:
+                    remaining.append(case)
+                    continue
+                path = verdict.claim.path
+                reason = JUDGED_SAME.format(test=verdict.claim.test, path=path, why=verdict.reason or "same flow")
+            covered.append(SkippedCaseModel(case_id=case.id, reason=reason, covered_by=path))
+            forwarder.notify(AgentEvent(
+                RunEventType.AGENT_MESSAGE, RunEventLevel.INFO,
+                clip(COVERED_NOTICE.format(case=case.id, reason=reason), MAX_MESSAGE_CHARS),
+                {"case": case.id, "covered_by": path},
+            ))
+        return remaining, covered, usage
 
     def _write_batch(
         self,

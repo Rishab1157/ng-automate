@@ -191,17 +191,32 @@ def test_stopping_early_keeps_what_was_written(conversation: Callable[..., list[
     assert [f.path for f in outcome.files] == [FEATURE]
 
 
-def test_nothing_to_generate_when_no_case_has_steps(
+def test_nothing_to_generate_when_the_test_data_has_no_cases(
     conversation: Callable[..., list[FakeConversation]], tmp_path: Path
 ) -> None:
     created = conversation()
-    empty = TestCaseSpecModel(id="EMPTY-1", title="Nothing", steps=[])
 
     with pytest.raises(ValidationError) as caught:
-        _generate(_project(tmp_path), TestDataSetModel(source_format=TestDataFormat.CSV, cases=[empty]))
+        _generate(_project(tmp_path), TestDataSetModel(source_format=TestDataFormat.CSV, cases=[]))
 
     assert caught.value.message == ErrorMessages.NO_RUNNABLE_TEST_CASES
     assert created == []
+
+
+def test_a_case_without_steps_goes_to_the_agent_to_work_them_out(
+    conversation: Callable[..., list[FakeConversation]], tmp_path: Path
+) -> None:
+    # Steps are detail: "A locked-out user cannot sign in" is a case to test in its own words.
+    project = _project(tmp_path)
+    created = conversation(edit=_writes_feature(project), answer="Wrote it.")
+    story = TestCaseSpecModel(id="QX-1", title="A locked-out user cannot sign in", description="The shop says why.",
+                              steps=[])
+
+    outcome = _generate(project, TestDataSetModel(source_format=TestDataFormat.TEXT, cases=[story]))
+
+    assert outcome.generated_cases == ["QX-1"] and outcome.skipped_cases == []
+    assert ("Case QX-1: A locked-out user cannot sign in\n  About: The shop says why.\n  (No steps given: work them out "
+            "from the case's words") in created[0].messages[0]
 
 
 def test_generator_that_stops_to_explain_is_told_to_continue(

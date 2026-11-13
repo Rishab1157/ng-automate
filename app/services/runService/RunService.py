@@ -24,7 +24,6 @@ from app.agents.RunnerAgent.TestCommandResolver import (
     is_test_file,
     read_small_text,
 )
-from app.agents.TestGeneratorAgent.GeneratedTestPlacement import runnable_cases
 from app.core.exceptions import ErrorCode, ErrorMessages, NotFoundError, ValidationError
 from app.models.analyzerModel import AnalyzerFindingsModel, FactSheetModel
 from app.models.runModel import (
@@ -41,7 +40,6 @@ from app.models.runModel import (
     TestAttemptModel,
     TestReportModel,
 )
-from app.models.testDataModel import TestDataStatus
 from app.models.testGeneratorModel import GenerationOutcomeModel
 from app.models.testRunModel import TestCommandModel
 from app.projections.runProjection import RUN_DETAIL_PROJECTION, RUN_EVENT_PROJECTION
@@ -128,12 +126,9 @@ class RunService:
         if files:
             await asyncio.to_thread(self._check_test_files_exist, project.id, files)
         if mode == RunMode.GENERATE:
-            if not test_data_id:
-                raise ValidationError(ErrorMessages.TEST_DATA_REQUIRED)
-            upload = await self.test_data_service.get(test_data_id, project.id, org_id)
-            if upload.status != TestDataStatus.READY or upload.data_set is None:
-                raise ValidationError(ErrorMessages.TEST_DATA_NOT_READY.format(status=upload.status.value))
-            if not runnable_cases(upload.data_set.cases)[0]:
+            # Fails now (400) when no file has a case or one is still being read; without test_data_id every file counts.
+            data_set = await self.test_data_service.cases_for_generation(project.id, org_id, test_data_id)
+            if not data_set.cases:
                 raise ValidationError(ErrorMessages.NO_RUNNABLE_TEST_CASES)
         else:
             test_data_id = None

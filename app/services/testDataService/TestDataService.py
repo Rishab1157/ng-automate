@@ -1,6 +1,6 @@
 """Test data sources: what the user wants tested, uploaded per project.
 
-Our own JSON/CSV test-case format is read at once (status ready). JSON in any other shape and plain text are stored
+JSON whole in our own test-case shape is read at once (status ready). JSON in any other shape and plain text are stored
 as they are (status processing) and turned into test cases by an LLM in the background (TestDataProcessor), with the
 local model (USE_LOCAL_LLM) or the upload's model connection. The user can then review and edit the cases (PUT), or
 edit the file itself in the editor (its text is read again), before a generate run uses them. Bad files are rejected
@@ -138,6 +138,31 @@ class TestDataService:
         )
         return [TestDataMapper.to_model(doc) for doc in docs]
 
+    async def cases_for_generation(
+        self, project_id: str, org_id: str, test_data_id: str | None = None
+    ) -> TestDataSetModel:
+        """The test cases a generate run writes tests for: those of ALL the project's files that have cases, oldest
+        file first (a project's knowledge base can be split over any number of files; files without cases are only
+        context for the generator). With `test_data_id`, only that file's. Raises ValidationError when a file is
+        still being read (its cases are not known yet) or no file has a case."""
+        if test_data_id:
+            upload = await self.get(test_data_id, project_id, org_id)
+            if upload.status != TestDataStatus.READY or upload.data_set is None:
+                raise ValidationError(ErrorMessages.TEST_DATA_NOT_READY.format(status=upload.status.value))
+            return upload.data_set
+        uploads = list(reversed(await self.get_all(project_id, org_id, limit=0)))
+        if any(upload.status == TestDataStatus.PROCESSING for upload in uploads):
+            raise ValidationError(ErrorMessages.TEST_DATA_STILL_READING)
+        data_sets = [upload.data_set for upload in uploads if upload.status == TestDataStatus.READY and upload.data_set]
+        cases = [case for data_set in data_sets for case in data_set.cases]
+        if not cases:
+            raise ValidationError(ErrorMessages.NO_RUNNABLE_TEST_CASES)
+        return TestDataSetModel(
+            source_format=data_sets[0].source_format,
+            cases=cases,
+            warnings=[warning for data_set in data_sets for warning in data_set.warnings],
+        )
+
     async def find_processing_ids(self) -> list[str]:
         """Sources still being read: what a restarted server must pick up again."""
         docs = await self.test_data_repo.find(
@@ -186,6 +211,16 @@ class TestDataService:
             "model_connection_id": ObjectId(connection_id) if connection_id else None,
         })
         return await self.get(test_data_id, project_id, org_id)
+
+    async def delete(self, test_data_id: str, project_id: str, org_id: str) -> None:
+        """Remove a test-data file (one uploaded by mistake): its record and the stored file. Not while a run uses the
+        project (409): its sandbox has the test-data folder. Only the user deletes test data; the agent only reads it."""
+        upload = await self.get(test_data_id, project_id, org_id)
+        if await self.run_service.has_active_run(upload.project_id, org_id):
+            raise ProjectBusyError(ErrorMessages.PROJECT_BUSY_TEST_DATA_DELETE)
+        await self.test_data_repo.delete_one({"_id": ObjectId(test_data_id)})
+        await asyncio.to_thread(self.project_service.storage.delete_test_data_file, upload.project_id, upload.filename)
+        logger.info("Test data %s (%s) deleted from project %s", test_data_id, upload.filename, upload.project_id)
 
     async def read_content(self, test_data_id: str, project_id: str, org_id: str) -> TestDataContentModel:
         """The file's text as it is stored, for the editor (not the cases read from it)."""
@@ -252,6 +287,22 @@ class TestDataService:
         }, revision)
         if written:
             logger.info("Test data %s read: %d case(s)", test_data_id, len(data_set.cases))
+        return written
+
+    async def mark_context(
+        self, test_data_id: str, revision: int | None = None, token_usage: TokenUsageModel | None = None
+    ) -> bool:
+        """Like mark_ready, for a source that holds no test cases (locators, accounts, notes): context for the
+        generator, never a failure."""
+        written = await self._set(test_data_id, {
+            "status": TestDataStatus.CONTEXT.value,
+            "data_set": None,
+            "case_count": 0,
+            "error": None,
+            "token_usage": _dump_usage(token_usage),
+        }, revision)
+        if written:
+            logger.info("Test data %s holds no test cases: kept as context for the generator", test_data_id)
         return written
 
     async def mark_failed(

@@ -356,7 +356,7 @@ def test_generate_run_is_created_with_its_test_data(
     assert executor.submitted == [body["id"]]
 
 
-def test_generate_run_needs_test_data_of_the_same_project(
+def test_generate_run_names_only_test_data_of_its_own_project_and_needs_a_file_with_cases(
     client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
 ) -> None:
     headers = auth_headers(org_id)
@@ -367,9 +367,46 @@ def test_generate_run_needs_test_data_of_the_same_project(
     other = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id, "mode": "generate", "test_data_id": other_data})
     malformed = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id, "mode": "generate", "test_data_id": "x"})
 
-    assert (missing.status_code, _error(missing)["message"]) == (400, ErrorMessages.TEST_DATA_REQUIRED)
+    # No file named: all of the project's files count, and this project has none with a case.
+    assert (missing.status_code, _error(missing)["message"]) == (400, ErrorMessages.NO_RUNNABLE_TEST_CASES)
     assert (other.status_code, _error(other)["message"]) == (404, ErrorMessages.TEST_DATA_NOT_FOUND)
     assert malformed.status_code == 422
+    assert executor.submitted == []
+
+
+def test_generate_run_without_a_file_takes_the_cases_of_all_files(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers = auth_headers(org_id)
+    project_id = seed_project(mongo, org_id)
+    seed_profile(mongo, org_id, project_id, datetime.now(UTC))
+    first = [{"id": "A-1", "title": "Login", "steps": [{"action": "open", "target": "https://x"}]}]
+    second = [{"id": "B-1", "title": "Cart", "steps": [{"action": "open", "target": "https://x/cart"}]}]
+    for name, cases in (("one.json", first), ("two.json", second)):
+        client.post(f"{PROJECT_BASE}/{project_id}/test-data", headers=headers,
+                    files={"file": (name, json.dumps(cases).encode(), "application/json")})
+
+    response = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id, "mode": "generate"})
+
+    assert response.status_code == 202, response.text
+    assert response.json()["test_data_id"] is None  # no single file: all of them
+    assert executor.submitted == [response.json()["id"]]
+
+
+def test_generate_run_waits_while_a_file_is_still_being_read(
+    client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
+) -> None:
+    headers = auth_headers(org_id)
+    project_id = seed_project(mongo, org_id)
+    seed_profile(mongo, org_id, project_id, datetime.now(UTC))
+    _upload_test_data(client, headers, project_id)
+    client.post(f"{PROJECT_BASE}/{project_id}/test-data", headers=headers,
+                files={"file": ("story.txt", b"A shopper signs in.", "text/plain")})  # read by the model: processing
+
+    response = client.post(f"{BASE}/", headers=headers, json={"project_id": project_id, "mode": "generate"})
+
+    assert response.status_code == 400
+    assert _error(response)["message"] == ErrorMessages.TEST_DATA_STILL_READING
     assert executor.submitted == []
 
 
@@ -391,7 +428,7 @@ def test_a_case_without_locators_can_be_generated(
     assert executor.submitted == [response.json()["id"]]
 
 
-def test_test_data_whose_cases_have_no_steps_is_refused_before_any_run(
+def test_test_data_whose_cases_have_no_steps_is_accepted_and_starts_no_run(
     client: TestClient, mongo: MongoClient, executor: FakeRunExecutor, auth_headers: AuthHeaders, org_id: str
 ) -> None:
     headers = auth_headers(org_id)
@@ -403,7 +440,8 @@ def test_test_data_whose_cases_have_no_steps_is_refused_before_any_run(
         files={"file": ("cases.json", json.dumps(cases).encode(), "application/json")},
     )
 
-    assert upload.status_code == 400  # a case needs steps to become a test
+    # Steps are detail, not a must: "Logout" is a case the generator works the steps out for. Uploading starts no run.
+    assert upload.status_code == 201 and upload.json()["case_count"] == 1
     assert executor.submitted == []
 
 

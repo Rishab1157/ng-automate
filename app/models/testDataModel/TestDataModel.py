@@ -1,6 +1,6 @@
 """Test data: what the user wants tested. The test generator turns it into framework tests.
 
-A data source is either our own JSON/CSV format (read at once) or free-form JSON / plain text that an LLM turns into
+A data source is either JSON whole in our own shape (read at once) or free-form JSON / plain text that an LLM turns into
 test cases in the background. A locator is never invented: a step either carries one from the source, names its
 element in words (`target_hint`, resolved later from the project's page objects or the live page), or is flagged.
 """
@@ -19,13 +19,16 @@ class TestDataFormat(str, Enum):
 
 
 class TestDataStatus(str, Enum):
-    """Our own JSON/CSV format is ready at once; free-form JSON and text are read by an LLM first."""
+    """JSON whole in our own (or TXGENIE's) shape is ready at once; any other file is read by an LLM first."""
 
     __test__ = False
 
     PROCESSING = "processing"
     READY = "ready"
     FAILED = "failed"
+    # Read without trouble, but it holds no test cases (locators, accounts, notes): the generator gets it as part of
+    # the user's knowledge base, never as the cases to write.
+    CONTEXT = "context"
 
 
 class TestStepModel(BaseModel):
